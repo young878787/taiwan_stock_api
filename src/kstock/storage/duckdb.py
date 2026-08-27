@@ -31,7 +31,7 @@ class DuckStore:
             f"CREATE OR REPLACE VIEW {table} AS SELECT * FROM read_parquet('{glob}')"
         )
 
-    def register_views(self, tables: tuple[str, ...] = ("daily", "minute", "tick", "instrument", "institutional", "margin")) -> None:
+    def register_views(self, tables: tuple[str, ...] = ("daily", "hourly", "minute", "tick", "instrument", "institutional", "margin")) -> None:
         for t in tables:
             self.register_view(t)
 

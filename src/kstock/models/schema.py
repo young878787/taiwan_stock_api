@@ -30,6 +30,20 @@ MINUTE_BAR_COLUMNS = [
     "source",
 ]
 
+HOURLY_BAR_COLUMNS = [
+    "symbol",
+    "market",
+    "date",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume_shares",
+    "turnover_twd",
+    "trade_count",
+    "source",
+]
+
 TICK_COLUMNS = [
     "symbol",
     "timestamp",
@@ -77,6 +91,7 @@ MARGIN_COLUMNS = [
 
 TABLES = {
     "daily": DAILY_BAR_COLUMNS,
+    "hourly": HOURLY_BAR_COLUMNS,
     "minute": MINUTE_BAR_COLUMNS,
     "tick": TICK_COLUMNS,
     "instrument": INSTRUMENT_COLUMNS,
@@ -114,6 +129,20 @@ TABLE_DTYPES: dict[str, dict[str, pl.DataType]] = {
         "close": pl.Float64,
         "volume_shares": pl.Int64,
         "turnover_twd": pl.Float64,
+        "source": pl.Utf8,
+    },
+    "hourly": {
+        "symbol": pl.Utf8,
+        "market": pl.Utf8,
+        # 小時K 以「台北時間、無時區」的小時開始時間標記（例：2026-08-26 09:00）
+        "date": pl.Datetime("us"),
+        "open": pl.Float64,
+        "high": pl.Float64,
+        "low": pl.Float64,
+        "close": pl.Float64,
+        "volume_shares": pl.Int64,
+        "turnover_twd": pl.Float64,
+        "trade_count": pl.Int64,
         "source": pl.Utf8,
     },
     "tick": {
