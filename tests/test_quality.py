@@ -3,7 +3,7 @@ from datetime import date
 import polars as pl
 import pytest
 
-from kstock.quality.checks import QualityIssue, check_daily_quality, check_institutional
+from kstock.quality.checks import QualityIssue, check_daily_quality, check_institutional, clean_daily
 
 
 def _bars(dates: list[str], prices: list[float], volumes: list[int] | None = None) -> pl.DataFrame:
@@ -82,6 +82,24 @@ def test_check_report_dicts():
     rep = check_daily_quality(_bars(["2024-01-02"], [100.0]))
     assert rep.passed
     assert rep.dicts() == []
+
+
+def test_clean_daily_drops_invalid_price_rows():
+    df = _bars(["2024-01-02", "2024-01-03", "2024-01-06"], [100.0, 0.0, 101.0])
+    cleaned = clean_daily(df)
+    assert cleaned.height == 2
+    assert cleaned["date"].to_list()[0] == date(2024, 1, 2)
+    assert (cleaned["close"] > 0).all()
+
+
+def test_rounding_noise_not_flagged():
+    # high 比 open 低 0.01 元屬四捨五入雜訊，不應列為 inconsistent
+    df = _bars(["2024-01-02"], [100.0]).with_columns(
+        pl.lit(99.99).alias("high"),
+        pl.lit(98.5).alias("low"),
+    )
+    report = check_daily_quality(df)
+    assert not any(i.check == "ohlc_inconsistent" for i in report.issues)
 
 
 def test_dataclass_misc():

@@ -69,15 +69,33 @@ def check_daily_quality(
     return report
 
 
-def _check_ohlc(sub: pl.DataFrame, symbol: str) -> list[QualityIssue]:
+def clean_daily(df: pl.DataFrame) -> pl.DataFrame:
+    """移除無效價格列（價格 ≤ 0 或空值），供 ML 訓練前清洗；保留合法資料不動。"""
+    if df.is_empty():
+        return df
+    valid = (
+        pl.col("open").is_not_null() & (pl.col("open") > 0)
+        & pl.col("high").is_not_null() & (pl.col("high") > 0)
+        & pl.col("low").is_not_null() & (pl.col("low") > 0)
+        & pl.col("close").is_not_null() & (pl.col("close") > 0)
+    )
+    return df.filter(valid)
+
+
+def _check_ohlc(sub: pl.DataFrame, symbol: str, tolerance_abs: float = 0.06, tolerance_rel: float = 0.002) -> list[QualityIssue]:
+    """OHLC 一致性檢查帶容差：小幅四捨五入雜訊（≤ max(0.06元, 0.2%×價格)）不算違規。"""
     issues: list[QualityIssue] = []
     for col in ("open", "high", "low", "close"):
         bad = sub.filter(pl.col(col).is_null() | (pl.col(col) <= 0))
         for r in bad.iter_rows(named=True):
             issues.append(QualityIssue(symbol=symbol, check="ohlc_nonpositive", date=_as_iso(r["date"]), message=f"{col}={r[col]}"))
+    tol = pl.max_horizontal(
+        pl.lit(tolerance_abs),
+        (pl.max_horizontal("open", "close") * tolerance_rel),
+    )
     inconsistent = sub.filter(
-        (pl.col("high") < pl.max_horizontal("open", "close"))
-        | (pl.col("low") > pl.min_horizontal("open", "close"))
+        ((pl.max_horizontal("open", "close") - pl.col("high")) > tol)
+        | ((pl.col("low") - pl.min_horizontal("open", "close")) > tol)
     )
     for r in inconsistent.iter_rows(named=True):
         issues.append(QualityIssue(symbol=symbol, check="ohlc_inconsistent", date=_as_iso(r["date"]), message=f"high={r['high']} low={r['low']} o={r['open']} c={r['close']}"))

@@ -4,6 +4,7 @@ from kstock.quality.checks import (
     audit_daily_report,
     check_daily_quality,
     check_institutional,
+    clean_daily,
 )
 
 __all__ = [
@@ -11,5 +12,6 @@ __all__ = [
     "QualityReport",
     "check_daily_quality",
     "check_institutional",
+    "clean_daily",
     "audit_daily_report",
 ]

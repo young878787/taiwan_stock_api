@@ -84,6 +84,39 @@ store.write_normalized("margin", margin)
 - 融資券資料源 `TaiwanStockMarginPurchaseShortSale`，單位為張，Adapter 自動 ×1000 轉股。
 - 皆輸出標準 schema（`models/schema.py`），可寫入 Parquet 或由 DuckDB 查詢。
 
+### 選股宇宙（ML 用前 N 大流動性）
+
+```python
+from kstock.universe.twse_whole_market import WholeMarketQuotes, select_top_liquid
+
+quotes = WholeMarketQuotes()
+frames = quotes.fetch_recent_days(sample_days=5)     # 近 5 個交易日全市場報表（TWSE）
+top = select_top_liquid(frames, n=300)               # 依日均成交金額排名（排除 ETF、低價股）
+top.write_csv("data/universe/top_liquidity_300.csv")
+```
+
+資料品質：`clean_daily(df)` 可在 ML 訓練前移除停牌等無效價格列；
+OHLC 一致性檢查含四捨五入容差（≤ max(0.06 元, 0.2%×價格)）。
+
+### ML 特徵管線（FEATURE 層）
+
+```python
+from kstock.features.ml import build_ml_features
+from kstock.storage.parquet import ParquetStore
+
+store = ParquetStore()
+feat = build_ml_features(
+    store.read_normalized("daily"),
+    store.read_normalized("institutional"),
+    store.read_normalized("margin"),
+)
+store.write_feature("ml_daily_v1", feat)   # -> data/features/ml_daily_v1.parquet
+```
+
+20 欄特徵：動能（return_1d/5d/20d、ma 比值）、波動、量比、RSI_14，
+籌碼（外資/投信/三大法人淨買張數與淨買比率、融券增減率），以及**無洩漏**標籤 `label_ret_1f`。
+所有欄位僅用當日（含）以前資訊。
+
 ### 小時K線（Yahoo Finance）
 
 FinMind 免費等級無盤中資料（tick / KBar / 5 秒指標皆需 VIP），
