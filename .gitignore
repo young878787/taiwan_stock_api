@@ -1,0 +1,48 @@
+# 環境 / 依賴
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.editorconfig
+
+# 快取
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.tox/
+.cache/
+.coverage.*
+*.pytest_cache/
+
+# 資料與產物
+data/
+*.parquet
+*.db
+*.duckdb
+output/
+artifacts/
+backtest_results/
+
+# 金鑰
+.env
+.env.*
+!.env.example
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Python 建置產物
+build/
+dist/
+*.whl
+*.tar.gz
+uv.lock
