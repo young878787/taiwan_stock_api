@@ -47,3 +47,7 @@ dist/
 *.tar.gz
 uv.lock
 AGENTS.md
+
+# RD-Agent 執行期產物
+log/
+prompt_cache.db

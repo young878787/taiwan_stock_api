@@ -83,3 +83,21 @@ uv run python -m qlab rdagent fin_factor_report   # 產出因子研究報告
 - `hourly` 表成交量不可靠（見 AGENTS.md），qlab 因子計算一律以 `daily` 層為準。
 - 台股自訂日曆由資料產生，不使用 Qlib 內建的中/美交易日曆。
 - RD-Agent 各版本 CLI 參數可能調整，細節以 `rdagent --help` 為準。
+- `pydantic-ai-slim` 需鎖定 `<2`（2.x 移除了 `MCPServerStreamableHTTP`，rdagent 0.8.0 會 import 失敗）。
+
+## 7. OpenRouter 模型相容性（實測）
+
+RD-Agent 大量依賴**嚴格 JSON 結構化輸出**（因子規格生成、程式碼生成等）。OpenRouter 模型需能遵守 JSON 指令：
+
+| 模型 | 純文字 | 結構化 JSON | 可跑 RD-Agent |
+|---|---|---|---|
+| `openai/gpt-4o-mini` | ✅ | ✅ | ✅（建議） |
+| `inclusionai/ling-3.0-flash-fin:free` | ✅ 金融問答品質佳 | ❌ 回長篇報告、不守 JSON 格式 | ❌ 會無限重試 |
+| `deepseek/deepseek-chat-v3-0324` | ⚠️ content 全為 null（token 被 reasoning 吃掉） | ❌ | ❌ |
+
+> `ling-3.0-flash-fin:free`（免費、124B MoE 金融微調）適合做**金融問答 / 研究輔助**，
+> 但不能當 RD-Agent 的主力模型。若要使用，把 `OPENROUTER_MODEL` 換掉即可。
+>
+> 相關處理已內建於 `qlab/rdagent_runner.py`：空值金鑰覆寫、`openai/` 前綴、
+> `ENABLE_RESPONSE_SCHEMA=false`（OpenRouter 免費模型不支援 response_format，走 DeepSeek 式 JSON 降級路徑）、
+> 放寬 `MAX_RETRY`/`RETRY_WAIT_SECONDS` 應對免費模型限流。

@@ -20,6 +20,12 @@ from pathlib import Path
 from kstock.config.settings import Settings, settings
 
 
+def _force_set(env: dict[str, str], key: str, value: str) -> None:
+    """等同 setdefault，但既有的「空字串」也會被覆寫（.env 常見 OPENAI_API_KEY= 空值）。"""
+    if not env.get(key):
+        env[key] = value
+
+
 def build_rdagent_env(s: Settings | None = None) -> dict[str, str]:
     """把共用 .env 的金鑰映射成 RD-Agent/LLM 期望的環境變數。
 
@@ -29,18 +35,27 @@ def build_rdagent_env(s: Settings | None = None) -> dict[str, str]:
     st = s or settings
     env = dict(os.environ)
     if st.openai_api_key:
-        env.setdefault("OPENAI_API_KEY", st.openai_api_key)
+        _force_set(env, "OPENAI_API_KEY", st.openai_api_key)
     if st.deepseek_api_key:
-        env.setdefault("DEEPSEEK_API_KEY", st.deepseek_api_key)
+        _force_set(env, "DEEPSEEK_API_KEY", st.deepseek_api_key)
         # RD-Agent 相容 OpenAI 介面，DeepSeek 走 OpenAI 相容端點
-        env.setdefault("OPENAI_API_BASE", st.deepseek_base_url)
-        env.setdefault("CHAT_MODEL", "deepseek-chat")
+        _force_set(env, "OPENAI_API_BASE", st.deepseek_base_url)
+        _force_set(env, "CHAT_MODEL", "deepseek-chat")
     if st.openrouter_api_key:
         # OpenRouter：OpenAI 相容，金鑰同時用 OPENROUTER_API_KEY 傳遞（部分模型需要）
-        env.setdefault("OPENROUTER_API_KEY", st.openrouter_api_key)
-        env.setdefault("OPENAI_API_BASE", st.openrouter_base_url)
-        env.setdefault("OPENAI_API_KEY", st.openrouter_api_key)
-        env.setdefault("CHAT_MODEL", st.openrouter_model)
+        _force_set(env, "OPENROUTER_API_KEY", st.openrouter_api_key)
+        _force_set(env, "OPENAI_API_BASE", st.openrouter_base_url)
+        _force_set(env, "OPENAI_API_KEY", st.openrouter_api_key)
+        # LiteLLM 需 "openai/" 前綴才會用自訂 api_base（OpenRouter 是 OpenAI 相容端點）
+        model = st.openrouter_model
+        _force_set(env, "CHAT_MODEL", model if model.startswith("openai/") else f"openai/{model}")
+        # OpenRouter 模型（尤其 :free）多不支援 response schema（結構化輸出）→ 關閉
+        _force_set(env, "ENABLE_RESPONSE_SCHEMA", "false")
+        # 部分模型把 <think>...</think> 混進 content，開啟清理
+        _force_set(env, "REASONING_THINK_RM", "true")
+        # :free 模型有嚴格限流，放寬重試
+        _force_set(env, "MAX_RETRY", "20")
+        _force_set(env, "RETRY_WAIT_SECONDS", "5")
     # 讓 RD-Agent 產物集中在 data/qlab 下（不入版控）
     workdir = Path(settings.data_dir) / "qlab" / "rdagent_workspace"
     workdir.mkdir(parents=True, exist_ok=True)
