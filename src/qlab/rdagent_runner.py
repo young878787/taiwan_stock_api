@@ -17,19 +17,30 @@ import subprocess
 import sys
 from pathlib import Path
 
-from kstock.config.settings import settings
+from kstock.config.settings import Settings, settings
 
 
-def build_rdagent_env() -> dict[str, str]:
-    """把共用 .env 的金鑰映射成 RD-Agent/LLM 期望的環境變數。"""
+def build_rdagent_env(s: Settings | None = None) -> dict[str, str]:
+    """把共用 .env 的金鑰映射成 RD-Agent/LLM 期望的環境變數。
+
+    支援三種後端（擇一即可，優先序：OpenRouter > DeepSeek > OpenAI）：
+    OpenRouter 走 OpenAI 相容介面（OPENAI_API_BASE 指向 openrouter.ai/api/v1）。
+    """
+    st = s or settings
     env = dict(os.environ)
-    if settings.openai_api_key:
-        env.setdefault("OPENAI_API_KEY", settings.openai_api_key)
-    if settings.deepseek_api_key:
-        env.setdefault("DEEPSEEK_API_KEY", settings.deepseek_api_key)
+    if st.openai_api_key:
+        env.setdefault("OPENAI_API_KEY", st.openai_api_key)
+    if st.deepseek_api_key:
+        env.setdefault("DEEPSEEK_API_KEY", st.deepseek_api_key)
         # RD-Agent 相容 OpenAI 介面，DeepSeek 走 OpenAI 相容端點
-        env.setdefault("OPENAI_API_BASE", settings.deepseek_base_url)
+        env.setdefault("OPENAI_API_BASE", st.deepseek_base_url)
         env.setdefault("CHAT_MODEL", "deepseek-chat")
+    if st.openrouter_api_key:
+        # OpenRouter：OpenAI 相容，金鑰同時用 OPENROUTER_API_KEY 傳遞（部分模型需要）
+        env.setdefault("OPENROUTER_API_KEY", st.openrouter_api_key)
+        env.setdefault("OPENAI_API_BASE", st.openrouter_base_url)
+        env.setdefault("OPENAI_API_KEY", st.openrouter_api_key)
+        env.setdefault("CHAT_MODEL", st.openrouter_model)
     # 讓 RD-Agent 產物集中在 data/qlab 下（不入版控）
     workdir = Path(settings.data_dir) / "qlab" / "rdagent_workspace"
     workdir.mkdir(parents=True, exist_ok=True)

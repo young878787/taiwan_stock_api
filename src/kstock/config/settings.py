@@ -27,6 +27,9 @@ class Settings:
     openai_api_key: str = field(default="")
     deepseek_api_key: str = field(default="")
     deepseek_base_url: str = field(default="https://api.deepseek.com/v1")
+    openrouter_api_key: str = field(default="")
+    openrouter_base_url: str = field(default="https://openrouter.ai/api/v1")
+    openrouter_model: str = field(default="deepseek/deepseek-chat-v3-0324")
 
     def __post_init__(self) -> None:
         env = os.environ
@@ -52,6 +55,12 @@ class Settings:
             object.__setattr__(self, "deepseek_api_key", env["DEEPSEEK_API_KEY"])
         if env.get("DEEPSEEK_BASE_URL"):
             object.__setattr__(self, "deepseek_base_url", env["DEEPSEEK_BASE_URL"])
+        if env.get("OPENROUTER_API_KEY"):
+            object.__setattr__(self, "openrouter_api_key", env["OPENROUTER_API_KEY"])
+        if env.get("OPENROUTER_BASE_URL"):
+            object.__setattr__(self, "openrouter_base_url", env["OPENROUTER_BASE_URL"])
+        if env.get("OPENROUTER_MODEL"):
+            object.__setattr__(self, "openrouter_model", env["OPENROUTER_MODEL"])
 
     @property
     def finmind_data_url(self) -> str:

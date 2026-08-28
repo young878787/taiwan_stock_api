@@ -24,6 +24,26 @@ def test_qlab_provider_dir_env_override(monkeypatch, tmp_path):
     assert s.provider_dir == tmp_path / "custom_provider"
 
 
+def test_openrouter_key_inherits_and_runner_maps(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-test")
+    monkeypatch.setenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.delenv("CHAT_MODEL", raising=False)
+
+    s = qlab_settings(Settings())
+    assert s.openrouter_api_key == "or-test"
+    assert s.openrouter_base_url == "https://openrouter.ai/api/v1"
+
+    from qlab.rdagent_runner import build_rdagent_env
+
+    env = build_rdagent_env(Settings())  # 重新建構以讀取當下 env
+    assert env["OPENROUTER_API_KEY"] == "or-test"
+    assert env["OPENAI_API_BASE"] == "https://openrouter.ai/api/v1"
+    assert env["OPENAI_API_KEY"] == "or-test"
+    assert env["CHAT_MODEL"] == "openai/gpt-4o-mini"
+
+
 def test_export_writes_qlib_bin_layout(store, test_settings):
     store.write_normalized(
         "daily", make_daily_bars("2330", ["2024-01-02", "2024-01-03", "2024-01-04"], [590.0, 598.0, 601.0])

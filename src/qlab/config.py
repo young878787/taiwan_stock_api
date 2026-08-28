@@ -23,6 +23,9 @@ class QlabSettings:
     openai_api_key: str = field(default_factory=lambda: kstock_settings.openai_api_key)
     deepseek_api_key: str = field(default_factory=lambda: kstock_settings.deepseek_api_key)
     deepseek_base_url: str = field(default_factory=lambda: kstock_settings.deepseek_base_url)
+    openrouter_api_key: str = field(default_factory=lambda: kstock_settings.openrouter_api_key)
+    openrouter_base_url: str = field(default_factory=lambda: kstock_settings.openrouter_base_url)
+    openrouter_model: str = field(default_factory=lambda: kstock_settings.openrouter_model)
     # Qlib 實驗輸出（回測紀錄、MLflow runs）
     experiment_dir: Path = field(default_factory=lambda: kstock_settings.data_dir / "qlab" / "experiments")
 
@@ -43,4 +46,7 @@ def qlab_settings(kstock: Settings | None = None) -> QlabSettings:
         openai_api_key=s.openai_api_key,
         deepseek_api_key=s.deepseek_api_key,
         deepseek_base_url=s.deepseek_base_url,
+        openrouter_api_key=s.openrouter_api_key,
+        openrouter_base_url=s.openrouter_base_url,
+        openrouter_model=s.openrouter_model,
     )

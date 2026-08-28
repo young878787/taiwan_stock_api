@@ -23,16 +23,23 @@ uv run python -c "import qlib, rdagent; print('ok')"
 
 ## 2. 金鑰設定（共用 .env）
 
-RD-Agent 需要 LLM 金鑰，與 kstock 的 `FINMIND_TOKEN` 放同一份 `.env`（OpenAI / DeepSeek 擇一）：
+RD-Agent 需要 LLM 金鑰，與 kstock 的 `FINMIND_TOKEN` 放同一份 `.env`。支援 OpenRouter / DeepSeek / OpenAI 擇一：
 
 ```bash
-OPENAI_API_KEY=sk-...
-# 或
+# OpenRouter（推薦：一個金鑰可用多種模型）
+OPENROUTER_API_KEY=sk-or-v1-...
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_MODEL=deepseek/deepseek-chat-v3-0324
+
+# 或 DeepSeek 官方
 DEEPSEEK_API_KEY=sk-...
 DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
+
+# 或 OpenAI 官方
+OPENAI_API_KEY=sk-...
 ```
 
-金鑰由 `kstock.config.settings.Settings` 統一載入，`qlab.rdagent_runner` 執行時自動注入子行程環境，不需另外 export。
+金鑰由 `kstock.config.settings.Settings` 統一載入，`qlab.rdagent_runner` 執行時自動注入子行程環境（OpenRouter 會映射成 `OPENAI_API_KEY` + `OPENAI_API_BASE` + `CHAT_MODEL`），不需另外 export。
 
 ## 3. 資料匯出（kstock → Qlib）
 
