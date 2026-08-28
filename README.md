@@ -49,6 +49,16 @@ uv run pytest          # 執行測試（全部離線運行，不需網路/金鑰
 | `SHIOAJI_KEY` / `SHIOAJI_SECRET` | 第二階段使用，先保留 |
 | `KSTOCK_DATA_DIR` | 資料根目錄（預設 `./data`） |
 
+## AI 因子研究（qlab 子專案：Qlib + RD-Agent）
+
+`src/qlab/` 與本套件共用 venv、`.env` 與 `data/`，把 normalized daily 轉成 Qlib bin 格式後進行 AI 因子分析（Alpha158 + LightGBM、RD-Agent 因子自動演化）。安裝、金鑰（`OPENAI_API_KEY` / `DEEPSEEK_API_KEY`）與使用說明見 **`docs/qlab_setup.md`**。
+
+```bash
+uv run python -m qlab export     # data/normalized/daily → data/qlab/qlib_data（Qlib bin 格式）
+uv run python -m qlab ic --start 2021-01-01 --end 2026-08-26   # Alpha158 + LightGBM IC 分析
+uv run python -m qlab rdagent quant   # RD-Agent（需 Docker + LLM 金鑰）
+```
+
 ## 使用範例
 
 ```python

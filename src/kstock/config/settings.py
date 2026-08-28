@@ -23,6 +23,10 @@ class Settings:
     twse_base_url: str = field(default="https://www.twse.com.tw")
     shioaji_key: str = field(default="")
     shioaji_secret: str = field(default="")
+    # AI 金鑰（qlab 子專案：Qlib + RD-Agent；與 kstock 共用同一份 .env）
+    openai_api_key: str = field(default="")
+    deepseek_api_key: str = field(default="")
+    deepseek_base_url: str = field(default="https://api.deepseek.com/v1")
 
     def __post_init__(self) -> None:
         env = os.environ
@@ -42,6 +46,12 @@ class Settings:
             object.__setattr__(self, "shioaji_key", env["SHIOAJI_KEY"])
         if env.get("SHIOAJI_SECRET"):
             object.__setattr__(self, "shioaji_secret", env["SHIOAJI_SECRET"])
+        if env.get("OPENAI_API_KEY"):
+            object.__setattr__(self, "openai_api_key", env["OPENAI_API_KEY"])
+        if env.get("DEEPSEEK_API_KEY"):
+            object.__setattr__(self, "deepseek_api_key", env["DEEPSEEK_API_KEY"])
+        if env.get("DEEPSEEK_BASE_URL"):
+            object.__setattr__(self, "deepseek_base_url", env["DEEPSEEK_BASE_URL"])
 
     @property
     def finmind_data_url(self) -> str:

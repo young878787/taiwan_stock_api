@@ -46,3 +46,4 @@ dist/
 *.whl
 *.tar.gz
 uv.lock
+AGENTS.md
