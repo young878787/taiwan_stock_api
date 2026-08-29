@@ -139,6 +139,24 @@ RD-Agent 的 embedding 只用於知識庫/因子去重的**相似度比較**。�
 | `local`（預設） | 純 Python 字元 3-gram hash 向量，零金鑰、離線可用；對因子名/描述的相似度排序足以取代真 embedding |
 | `openai` | 走 litellm（需真正的 OpenAI / Azure 金鑰） |
 
+### 7.3 conda 環境（fin_factor 因子執行）
+
+fin_factor 的因子程式碼以 `conda run -n <env>` 在本機 conda 環境執行（quant 走 Docker）。
+`rdagent_runner` 會偵測 `~/miniconda3` 並自動注入 `CONDA_DEFAULT_ENV`、`BIN_PATH`。
+手動準備（RD-Agent 首次執行也會自動建 `rdagent4qlib` 並安裝 qlib）：
+
+```bash
+~/miniconda3/bin/conda create -y -n rdagent python=3.10
+~/miniconda3/bin/conda run -n rdagent pip install pandas numpy scipy statsmodels loguru tables
+# tables(pytables) 必裝：因子結果以 result.h5 (HDF5) 存取
+```
+
+已知陷阱：RD-Agent 的 `CondaConf` 在物件建構時就解析 bin_path，若 conda env
+尚未建立會得到空值並快取複用（`qrun`/`python` 找不到、誤用系統 python）。
+`rdagent_runner` 以 `BIN_PATH` 環境變數預先注入兩個 env 的 bin 路徑作為 fallback；
+若曾卡在此狀態，重啟前順手清 `data/qlab/rdagent_workspace/pickle_cache/`
+（pickle cache 會把舊的失敗執行結果快取住，導致修正迴圈不會真正重新執行）。
+
 >
 > 相關處理已內建於 `qlab/rdagent_runner.py`：空值金鑰覆寫、`openai/` 前綴、
 > `ENABLE_RESPONSE_SCHEMA=false`（OpenRouter 免費模型不支援 response_format，走 DeepSeek 式 JSON 降級路徑）、
