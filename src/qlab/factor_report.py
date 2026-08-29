@@ -41,7 +41,15 @@ def _load_factor_dir(factor_dir: Path) -> FactorResult | None:
     result_file = factor_dir / "result.h5"
     if not result_file.exists():
         return None
-    df = pd.read_hdf(result_file, key="data")
+    df = None
+    for key in ("data", "factor"):
+        try:
+            df = pd.read_hdf(result_file, key=key)
+            break
+        except (KeyError, ValueError):
+            continue
+    if df is None:
+        return None
     if isinstance(df, pd.Series):
         # ling 生成的程式碼可能以 Series（帶 name）儲存，統一轉 DataFrame
         df = df.to_frame(name=df.name or "factor")
