@@ -92,11 +92,42 @@ RD-Agent 大量依賴**嚴格 JSON 結構化輸出**（因子規格生成、程�
 | 模型 | 純文字 | 結構化 JSON | 可跑 RD-Agent |
 |---|---|---|---|
 | `openai/gpt-4o-mini` | ✅ | ✅ | ✅（建議） |
-| `inclusionai/ling-3.0-flash-fin:free` | ✅ 金融問答品質佳 | ❌ 回長篇報告、不守 JSON 格式 | ❌ 會無限重試 |
+| `inclusionai/ling-3.0-flash-fin:free` | ✅ 金融問答品質佳 | ⚠️ 原生不守 JSON → 已由 instructor 修正 | ✅（走 instructor backend） |
 | `deepseek/deepseek-chat-v3-0324` | ⚠️ content 全為 null（token 被 reasoning 吃掉） | ❌ | ❌ |
 
-> `ling-3.0-flash-fin:free`（免費、124B MoE 金融微調）適合做**金融問答 / 研究輔助**，
-> 但不能當 RD-Agent 的主力模型。若要使用，把 `OPENROUTER_MODEL` 換掉即可。
+### 7.1 `inclusionai/ling-3.0-flash-fin:free` 的結構化輸出修正（instructor）
+
+該模型**不支援 `response_format` / `structured_outputs`**（已由 OpenRouter models API
+`supported_parameters` 證實），原生行為是回長篇報告而非 JSON，導致 RD-Agent 無限重試。
+
+解法：`qlab/rdagent_instructor.py` 提供自訂 RD-Agent backend
+`InstructorLiteLLMBackend`（繼承 `LiteLLMAPIBackend`），結構化輸出改走
+[instructor](https://github.com/567-labs/instructor) 的 `Mode.MD_JSON`：
+
+1. JSON Schema 以 markdown 指令注入 prompt（不依賴伺服端 `response_format`）；
+2. 解析回應中的 JSON（容忍 `<think>` 區塊、長篇報告、code block）；
+3. pydantic 驗證失敗時，instructor 會把「驗證錯誤 + 原回應」回灌模型自動重試。
+
+`qlab/rdagent_runner.py` 已自動注入 `BACKEND=qlab.rdagent_instructor.InstructorLiteLLMBackend`，
+不需手動設定。相關環境變數：
+
+| 變數 | 預設 | 說明 |
+|---|---|---|
+| `KSTOCK_RDA_INSTRUCTOR_BACKEND` | `1` | 設 `0` 關閉，改回純 LiteLLM backend |
+| `KSTOCK_INSTRUCTOR_RETRIES` | `4` | instructor 單次請求內的驗證重試次數 |
+
+單獨實測結構化輸出（不需 Docker / 不跑完整 RD-Agent）：
+
+```bash
+uv run python -m qlab rdatest                                   # 用 .env 的 OPENROUTER_MODEL
+uv run python -m qlab rdatest --model inclusionai/ling-3.0-flash-fin:free --retries 6
+```
+
+> 限制：MD_JSON 是 prompt 約束 + 驗證重試，**不是生成時 logits 約束**
+> （後者只有 outlines/vLLM 等本地後端做得到），因此不保證 100% 遵守 schema。
+> 另 embedding 仍走 LiteLLM（OpenRouter 無 embedding 端點，需要 embedding 的
+> 流程仍須配 DeepSeek/OpenAI 金鑰）。
+
 >
 > 相關處理已內建於 `qlab/rdagent_runner.py`：空值金鑰覆寫、`openai/` 前綴、
 > `ENABLE_RESPONSE_SCHEMA=false`（OpenRouter 免費模型不支援 response_format，走 DeepSeek 式 JSON 降級路徑）、

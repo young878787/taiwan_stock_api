@@ -16,6 +16,7 @@ dependencies = [
 
 [dependency-groups]
 ai = [
+    "instructor>=1.0",
     "pydantic-ai-slim[mcp,openai,prefect]>=1.0,<2",
     "pyqlib>=0.9.7",
     "rdagent>=0.8.0",

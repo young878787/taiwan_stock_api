@@ -23,6 +23,12 @@ def main(argv: list[str] | None = None) -> int:
     p_rd = sub.add_parser("rdagent", help="執行 RD-Agent CLI（參數原樣轉傳，金鑰自動注入）")
     p_rd.add_argument("args", nargs="*", help='例如：fin_factor / quant / fin_factor_report')
 
+    p_rdtest = sub.add_parser(
+        "rdatest", help="以 instructor MD_JSON 對目前模型做結構化輸出實測（需真實金鑰）"
+    )
+    p_rdtest.add_argument("--model", default=None, help="覆寫模型（預設 OPENROUTER_MODEL / CHAT_MODEL）")
+    p_rdtest.add_argument("--retries", type=int, default=4, help="instructor 驗證重試次數（預設 4）")
+
     ns = parser.parse_args(argv)
 
     if ns.command == "export":
@@ -41,6 +47,12 @@ def main(argv: list[str] | None = None) -> int:
         from qlab.rdagent_runner import run_rdagent
 
         return run_rdagent(ns.args)
+
+    if ns.command == "rdatest":
+        from qlab.rdatest import run_structured_test
+
+        print(run_structured_test(model=ns.model, max_retries=ns.retries))
+        return 0
 
     return 1
 

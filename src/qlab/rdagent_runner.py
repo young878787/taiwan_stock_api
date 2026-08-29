@@ -56,6 +56,10 @@ def build_rdagent_env(s: Settings | None = None) -> dict[str, str]:
         # :free 模型有嚴格限流，放寬重試
         _force_set(env, "MAX_RETRY", "20")
         _force_set(env, "RETRY_WAIT_SECONDS", "5")
+        # 結構化輸出改走 instructor（MD_JSON：schema 進 prompt + pydantic 驗證失敗帶錯重試），
+        # 繞過 OpenRouter 免費模型不支援 response_format 的限制。設 KSTOCK_RDA_INSTRUCTOR_BACKEND=0 可關閉。
+        if env.get("KSTOCK_RDA_INSTRUCTOR_BACKEND", "1").lower() not in ("0", "false", "no"):
+            _force_set(env, "BACKEND", "qlab.rdagent_instructor.InstructorLiteLLMBackend")
     # 讓 RD-Agent 產物集中在 data/qlab 下（不入版控）
     workdir = Path(settings.data_dir) / "qlab" / "rdagent_workspace"
     workdir.mkdir(parents=True, exist_ok=True)
