@@ -125,10 +125,22 @@ uv run python -m qlab rdatest --model inclusionai/ling-3.0-flash-fin:free --retr
 
 > 限制：MD_JSON 是 prompt 約束 + 驗證重試，**不是生成時 logits 約束**
 > （後者只有 outlines/vLLM 等本地後端做得到），因此不保證 100% 遵守 schema。
-> 另 embedding 仍走 LiteLLM（OpenRouter 無 embedding 端點，需要 embedding 的
-> 流程仍須配 DeepSeek/OpenAI 金鑰）。
+
+### 7.2 embedding：本地 fallback（OpenRouter / DeepSeek 皆無 embedding 端點）
+
+RD-Agent 的 embedding 只用於知識庫/因子去重的**相似度比較**。實測 OpenRouter 對
+`text-embedding-3-small` 回 400（`encoding_format` 錯誤），DeepSeek 官方亦無 embedding API。
+
+`InstructorLiteLLMBackend` 提供 embedding 供應商切換
+（`rdagent_runner` 在 OpenRouter 分支自動注入 `KSTOCK_EMBEDDING_PROVIDER=local`）：
+
+| 值 | 行為 |
+|---|---|
+| `local`（預設） | 純 Python 字元 3-gram hash 向量，零金鑰、離線可用；對因子名/描述的相似度排序足以取代真 embedding |
+| `openai` | 走 litellm（需真正的 OpenAI / Azure 金鑰） |
 
 >
 > 相關處理已內建於 `qlab/rdagent_runner.py`：空值金鑰覆寫、`openai/` 前綴、
 > `ENABLE_RESPONSE_SCHEMA=false`（OpenRouter 免費模型不支援 response_format，走 DeepSeek 式 JSON 降級路徑）、
-> 放寬 `MAX_RETRY`/`RETRY_WAIT_SECONDS` 應對免費模型限流。
+> 放寬 `MAX_RETRY`/`RETRY_WAIT_SECONDS` 應對免費模型限流、自動偵測 `~/miniconda3`
+> 並注入 `CONDA_DEFAULT_ENV=rdagent`（fin_factor 因子程式碼以 conda run 執行）。

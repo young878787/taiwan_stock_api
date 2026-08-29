@@ -42,6 +42,31 @@ JSON_OBJECT_FORMAT = {"type": "json_object"}
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
+# 本地 fallback embedding 維度（僅用於相似度比較，維度只要自洽即可）
+_LOCAL_EMBED_DIM = 256
+
+
+def _local_embed(texts: list[str]) -> list[list[float]]:
+    """純 Python 字元 3-gram hash 向量（零依賴、零金鑰、離線可用）。
+
+    用途：RD-Agent 因子去重只算餘弦相似度，對「因子名稱/描述」這類短文字，
+    char n-gram TF 向量的相似度排序與真 embedding 高度一致，足以取代。
+    維度自洽（同方法生成）即可，與 OpenAI embedding 維度不相容也無妨。
+    """
+    import hashlib
+    import math
+
+    vectors: list[list[float]] = []
+    for text in texts:
+        vec = [0.0] * _LOCAL_EMBED_DIM
+        t = " ".join(text.lower().split())
+        for i in range(max(0, len(t) - 2)):
+            h = int(hashlib.md5(t[i : i + 3].encode("utf-8")).hexdigest(), 16)
+            vec[h % _LOCAL_EMBED_DIM] += 1.0
+        norm = math.sqrt(sum(x * x for x in vec)) or 1.0
+        vectors.append([x / norm for x in vec])
+    return vectors
+
 
 def _strip_model_prefix(chat_model: str) -> str:
     """RD-Agent 的 CHAT_MODEL 帶 litellm 前綴（``openai/...``）。
@@ -143,6 +168,20 @@ class InstructorLiteLLMBackend(LiteLLMAPIBackend):
         cleaned = strip_think(content)
         parser = JSONParser(add_json_in_prompt=True)
         return parser.parse(cleaned), finish_reason
+
+    def _create_embedding_inner_function(self, input_content_list: list[str]) -> list[list[float]]:
+        """embedding 供應商可切換（``KSTOCK_EMBEDDING_PROVIDER``）。
+
+        - ``local``（預設）：本地字元 3-gram hash 向量，零金鑰、離線可用。
+          OpenRouter 無 embedding 端點（實測 400 encoding_format 錯誤），
+          而 RD-Agent 的 embedding 只用於知識庫/因子去重的相似度比較，
+          本地向量足以取代。
+        - ``openai``：走 litellm（需真的 OpenAI 或 Azure 金鑰，DeepSeek 無 embedding 端點）。
+        """
+        provider = os.environ.get("KSTOCK_EMBEDDING_PROVIDER", "local").lower()
+        if provider == "openai":
+            return super()._create_embedding_inner_function(input_content_list)
+        return _local_embed(input_content_list)
 
     def _create_chat_completion_inner_function(  # type: ignore[no-untyped-def]
         self,

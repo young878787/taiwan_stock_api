@@ -67,6 +67,9 @@ def build_rdagent_env(s: Settings | None = None) -> dict[str, str]:
             _force_set(env, "CONDA_DEFAULT_ENV", env.get("CONDA_DEFAULT_ENV") or "rdagent")
             if str(conda_bin) not in env.get("PATH", ""):
                 env["PATH"] = f"{conda_bin}:{env.get('PATH', '')}"
+        # OpenRouter 無 embedding 端點（DeepSeek 亦無）：embedding 預設改走本地
+        # 字元 n-gram 向量（僅用於因子去重相似度）。有真 OpenAI 金鑰時可設 openai。
+        _force_set(env, "KSTOCK_EMBEDDING_PROVIDER", env.get("KSTOCK_EMBEDDING_PROVIDER") or "local")
     # 讓 RD-Agent 產物集中在 data/qlab 下（不入版控）
     workdir = Path(settings.data_dir) / "qlab" / "rdagent_workspace"
     workdir.mkdir(parents=True, exist_ok=True)

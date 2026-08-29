@@ -180,6 +180,55 @@ def test_runner_injects_conda_env_when_available(monkeypatch):
         assert str(Path.home() / "miniconda3" / "bin") in env["PATH"]
 
 
+def test_local_embed_similarity_and_dims():
+    """本地 fallback embedding：維度一致、相似文字比不相關文字接近。"""
+    import math
+
+    vecs = ri._local_embed(
+        [
+            "factor_name: 5-day momentum\nfactor_description: short term price momentum",
+            "factor_name: 5-day momentum reversal\nfactor_description: short term momentum signal",
+            "完全無關的中文財報品質因子描述，談論現金流量與負債比率。",
+        ]
+    )
+    assert all(len(v) == ri._LOCAL_EMBED_DIM for v in vecs)
+    assert all(math.isclose(math.sqrt(sum(x * x for x in v)), 1.0) for v in vecs)  # 已歸一化
+
+    def cos(a: list[float], b: list[float]) -> float:
+        return sum(x * y for x, y in zip(a, b))
+
+    assert cos(vecs[0], vecs[1]) > cos(vecs[0], vecs[2])  # 相近描述 > 無關描述
+
+
+def test_backend_embedding_provider(monkeypatch):
+    """KSTOCK_EMBEDDING_PROVIDER=local 走本地向量；openai 走父類 litellm。"""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-test")
+    backend = ri.InstructorLiteLLMBackend()
+
+    # local（預設）
+    monkeypatch.delenv("KSTOCK_EMBEDDING_PROVIDER", raising=False)
+    out = backend._create_embedding_inner_function(["因子A", "因子B"])
+    assert len(out) == 2 and len(out[0]) == ri._LOCAL_EMBED_DIM
+
+    # openai → 走父類（mock 掉 litellm embedding 呼叫）
+    monkeypatch.setenv("KSTOCK_EMBEDDING_PROVIDER", "openai")
+    monkeypatch.setattr(
+        "rdagent.oai.backend.litellm.LiteLLMAPIBackend._create_embedding_inner_function",
+        lambda self, texts: [[0.1, 0.2] for _ in texts],
+    )
+    out = backend._create_embedding_inner_function(["因子A"])
+    assert out[0] == [0.1, 0.2]
+
+
+def test_runner_injects_embedding_provider(monkeypatch):
+    from qlab.rdagent_runner import build_rdagent_env
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-test")
+    monkeypatch.delenv("KSTOCK_EMBEDDING_PROVIDER", raising=False)
+    env = build_rdagent_env(Settings())
+    assert env["KSTOCK_EMBEDDING_PROVIDER"] == "local"
+
+
 def test_rdatest_raises_without_key(monkeypatch):
     import qlab.rdatest as rt
     from types import SimpleNamespace
