@@ -12,6 +12,7 @@ import pytest
 from pydantic import BaseModel
 
 import qlab.rdagent_instructor as ri
+from conftest import make_daily_bars
 from kstock.config.settings import Settings
 
 
@@ -260,6 +261,66 @@ def test_factor_report_collects_and_renders(tmp_path):
 
     out = export_report(workspace=ws, output=tmp_path / "report.md")
     assert "因子摘要" in out.read_text(encoding="utf-8")
+
+
+def test_export_h5_writes_tw_daily_pv(store, test_settings, monkeypatch, tmp_path):
+    """export-h5：台股 parquet → RD-Agent 期待格式 daily_pv.h5。"""
+    import pandas as pd
+
+    import qlab.export_h5 as eh
+    from qlab.export_h5 import export_daily_pv
+
+    store.write_normalized(
+        "daily",
+        make_daily_bars("2330", ["2024-01-02", "2024-01-03"], [590.0, 598.0]),
+    )
+    store.write_normalized(
+        "daily", make_daily_bars("0050", ["2024-01-02"], [30.0])
+    )
+
+    # 把 kstock settings 指到 test_settings（tmp_path 隔離輸出）
+    monkeypatch.setattr(eh, "kstock_settings", test_settings)
+
+    out_dir = tmp_path / "factor_source_data_tw"
+    dbg_dir = tmp_path / "factor_source_data_tw_debug"
+    full, debug = export_daily_pv(output_dir=out_dir, debug_dir=dbg_dir, debug_symbols=1)
+
+    # 正式版：2 檔
+    df = pd.read_hdf(full.path, key="data")
+    assert list(df.columns) == ["$open", "$close", "$high", "$low", "$volume", "$factor"]
+    assert df.index.names == ["datetime", "instrument"]
+    assert df.index.get_level_values("instrument").unique().tolist() == ["TSE0050", "TSE2330"]  # market+symbol
+    assert (df["$factor"] == 1.0).all()
+    assert df["$volume"].iloc[0] == 1_000_000  # 股
+    assert str(df.index.get_level_values("datetime").min().date()) == "2024-01-02"
+
+    # debug 版：只取 1 檔
+    d2 = pd.read_hdf(debug.path, key="data")
+    assert d2.index.get_level_values("instrument").nunique() == 1
+
+    # README 一併寫出
+    assert (out_dir / "README.md").exists()
+
+
+def test_runner_injects_tw_factor_folder(test_settings, monkeypatch):
+    """台股版 daily_pv.h5 存在時才注入 FACTOR_CoSTEER_DATA_FOLDER。"""
+    from qlab.rdagent_runner import build_rdagent_env
+
+    _tw = test_settings.data_dir / "qlab" / "factor_source_data_tw"
+    _dbg = test_settings.data_dir / "qlab" / "factor_source_data_tw_debug"
+    _tw.mkdir(parents=True, exist_ok=True)
+    _dbg.mkdir(parents=True, exist_ok=True)
+    (_tw / "daily_pv.h5").touch()
+    (_dbg / "daily_pv.h5").touch()
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-test")
+    monkeypatch.setattr("qlab.rdagent_runner.settings", test_settings)
+    env = build_rdagent_env(test_settings)
+    assert env["FACTOR_COSTEER_DATA_FOLDER"] == str(_tw)
+    assert env["FACTOR_COSTEER_DATA_FOLDER_DEBUG"] == str(_dbg)
+
+    # rdagent_workspace 位置跟著 test_settings（data_dir）走
+    assert env["RDA_GIT_HTTP_PROXY"] == ""
 
 
 def test_rdatest_raises_without_key(monkeypatch):

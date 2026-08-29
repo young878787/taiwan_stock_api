@@ -70,6 +70,21 @@ def build_rdagent_env(s: Settings | None = None) -> dict[str, str]:
         # OpenRouter 無 embedding 端點（DeepSeek 亦無）：embedding 預設改走本地
         # 字元 n-gram 向量（僅用於因子去重相似度）。有真 OpenAI 金鑰時可設 openai。
         _force_set(env, "KSTOCK_EMBEDDING_PROVIDER", env.get("KSTOCK_EMBEDDING_PROVIDER") or "local")
+        # 保險：RD-Agent 的 CondaConf.change_bin_path 在物件建構時跑 `conda run -n <env> env`
+        # 解析 bin_path，若 conda env 尚未建立（首次 prepare 的 race）會得到空值，
+        # 導致 qrun/python「沒有那個文件或目錄」。預先注入兩個 env 的 bin 路徑作為 fallback。
+        envs_bin = Path.home() / "miniconda3" / "envs"
+        if (envs_bin / "rdagent" / "bin").exists() and not env.get("BIN_PATH"):
+            parts = [str(envs_bin / name / "bin") for name in ("rdagent", "rdagent4qlib")]
+            _force_set(env, "BIN_PATH", ":".join(parts))
+        # fin_factor 因子資料指到台股版（若已用 `qlab export-h5` 產生）：
+        # RD-Agent 預設從 qlib 下載中國 A 股，改指我們的台股 daily_pv.h5。
+        # 兩個資料目錄都存在時 RD-Agent 會跳過內建資料生成（見 get_data_folder_intro）。
+        tw_source = Path(settings.data_dir) / "qlab" / "factor_source_data_tw"
+        tw_debug = Path(settings.data_dir) / "qlab" / "factor_source_data_tw_debug"
+        if (tw_source / "daily_pv.h5").exists() and (tw_debug / "daily_pv.h5").exists():
+            _force_set(env, "FACTOR_COSTEER_DATA_FOLDER", str(tw_source))
+            _force_set(env, "FACTOR_COSTEER_DATA_FOLDER_DEBUG", str(tw_debug))
     # 讓 RD-Agent 產物集中在 data/qlab 下（不入版控）
     workdir = Path(settings.data_dir) / "qlab" / "rdagent_workspace"
     workdir.mkdir(parents=True, exist_ok=True)

@@ -157,6 +157,33 @@ fin_factor 的因子程式碼以 `conda run -n <env>` 在本機 conda 環境執�
 若曾卡在此狀態，重啟前順手清 `data/qlab/rdagent_workspace/pickle_cache/`
 （pickle cache 會把舊的失敗執行結果快取住，導致修正迴圈不會真正重新執行）。
 
+### 7.4 用台股資料跑 fin_factor（取代內建 A 股）
+
+RD-Agent 的 `fin_factor` 預設從 qlib 下載**中國 A 股**日K（`daily_pv.h5`），
+與本專案資料無關。要把因子演化跑在**台股**上，先把台股日K轉成
+RD-Agent 期待的 `daily_pv.h5` 格式：
+
+```bash
+uv run python -m qlab export-h5              # 正式版（全標的）+ debug 子集（預設 20 檔）
+uv run python -m qlab export-h5 --debug-symbols 50
+```
+
+輸出（不入版控）：`data/qlab/factor_source_data_tw{,_debug}/daily_pv.h5`。
+- index `(datetime, instrument)`，instrument 為 `{market}{symbol}`（如 `TSE2330`）
+- 欄位 `$open/$close/$high/$low/$volume/$factor`（$volume=股、$factor=1.0 未復權）
+- 只含台股日K（FinMind/TWSE，`data/normalized/daily`），2021/01 ~ 2026/08
+
+產生後 `rdagent_runner` 會自動注入 `FACTOR_COSTEER_DATA_FOLDER`（台股版資料，
+RD-Agent 偵測到資料目錄已存在即**跳過 A 股下載**）：
+
+```bash
+uv run python -m qlab rdagent fin_factor      # 現在跑的是台股因子演化
+```
+
+> 注意：`daily_pv.h5` 未復權（$factor=1.0），跨除權息日算報酬會跳空；
+> 且 RD-Agent 首次資料下載後每個工作區是全新 run，先前用 A 股跑出的因子
+> （工作區 `RD-Agent_workspace`）不會混入台股 run。
+
 >
 > 相關處理已內建於 `qlab/rdagent_runner.py`：空值金鑰覆寫、`openai/` 前綴、
 > `ENABLE_RESPONSE_SCHEMA=false`（OpenRouter 免費模型不支援 response_format，走 DeepSeek 式 JSON 降級路徑）、

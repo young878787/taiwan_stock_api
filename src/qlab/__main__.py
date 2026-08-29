@@ -34,6 +34,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_rdt.add_argument("--output", default=None, help="報告輸出路徑（預設 <data>/qlab/factor_report.md）")
 
+    p_h5 = sub.add_parser(
+        "export-h5", help="台股日K → RD-Agent fin_factor 資料格式（daily_pv.h5，取代內建 A 股資料）"
+    )
+    p_h5.add_argument("--debug-symbols", type=int, default=20, help="debug 子集標的數（預設 20）")
+
     ns = parser.parse_args(argv)
 
     if ns.command == "export":
@@ -52,6 +57,14 @@ def main(argv: list[str] | None = None) -> int:
         from qlab.rdagent_runner import run_rdagent
 
         return run_rdagent(ns.args)
+
+    if ns.command == "export-h5":
+        from qlab.export_h5 import export_daily_pv
+
+        full, debug = export_daily_pv(debug_symbols=ns.debug_symbols)
+        print(f"正式版：{full.path}（{full.n_rows:,} 列 / {full.n_symbols} 標的 / {full.start}~{full.end}）")
+        print(f"debug 版：{debug.path}（{debug.n_rows:,} 列 / {debug.n_symbols} 標的）")
+        return 0
 
     if ns.command == "factor-report":
         from pathlib import Path
