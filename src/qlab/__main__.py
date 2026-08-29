@@ -29,6 +29,11 @@ def main(argv: list[str] | None = None) -> int:
     p_rdtest.add_argument("--model", default=None, help="覆寫模型（預設 OPENROUTER_MODEL / CHAT_MODEL）")
     p_rdtest.add_argument("--retries", type=int, default=4, help="instructor 驗證重試次數（預設 4）")
 
+    p_rdt = sub.add_parser(
+        "factor-report", help="匯出 fin_factor 因子結果報告（data/qlab/factor_report.md）"
+    )
+    p_rdt.add_argument("--output", default=None, help="報告輸出路徑（預設 <data>/qlab/factor_report.md）")
+
     ns = parser.parse_args(argv)
 
     if ns.command == "export":
@@ -47,6 +52,15 @@ def main(argv: list[str] | None = None) -> int:
         from qlab.rdagent_runner import run_rdagent
 
         return run_rdagent(ns.args)
+
+    if ns.command == "factor-report":
+        from pathlib import Path
+
+        from qlab.factor_report import export_report
+
+        out = export_report(output=Path(ns.output) if ns.output else None)
+        print(f"報告已輸出：{out}")
+        return 0
 
     if ns.command == "rdatest":
         from qlab.rdatest import run_structured_test

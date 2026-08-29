@@ -229,6 +229,39 @@ def test_runner_injects_embedding_provider(monkeypatch):
     assert env["KSTOCK_EMBEDDING_PROVIDER"] == "local"
 
 
+def test_factor_report_collects_and_renders(tmp_path):
+    """factor-report：從假工作區收集 result.h5 並產出 Markdown 報告。"""
+    import pandas as pd
+
+    from qlab.factor_report import build_report, collect_results, export_report
+
+    ws = tmp_path / "RD-Agent_workspace"
+    # 成功因子
+    d1 = ws / "aaaa1111"
+    d1.mkdir(parents=True)
+    idx = pd.MultiIndex.from_tuples(
+        [("2024-01-02", "2330"), ("2024-01-03", "2330")], names=["datetime", "instrument"]
+    )
+    pd.DataFrame({"Mom_5D": [0.01, None]}, index=idx).to_hdf(d1 / "result.h5", key="data")
+    # 未執行成功的目錄（無 result.h5）→ 應被忽略
+    (ws / "bbbb2222").mkdir()
+
+    results = collect_results(ws)
+    assert len(results) == 1
+    assert results[0].factor_name == "Mom_5D"
+    assert results[0].n_rows == 2
+    assert results[0].n_instruments == 1
+    assert results[0].stats["na_ratio"] == pytest.approx(0.5)
+
+    report = build_report(results, n_total=10)
+    assert "# RD-Agent fin_factor 因子結果報告" in report
+    assert "`Mom_5D`" in report
+    assert "演化進度 10 個" in report
+
+    out = export_report(workspace=ws, output=tmp_path / "report.md")
+    assert "因子摘要" in out.read_text(encoding="utf-8")
+
+
 def test_rdatest_raises_without_key(monkeypatch):
     import qlab.rdatest as rt
     from types import SimpleNamespace
