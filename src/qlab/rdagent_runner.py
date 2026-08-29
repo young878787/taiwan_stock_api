@@ -61,12 +61,25 @@ def build_rdagent_env(s: Settings | None = None) -> dict[str, str]:
         if env.get("KSTOCK_RDA_INSTRUCTOR_BACKEND", "1").lower() not in ("0", "false", "no"):
             _force_set(env, "BACKEND", "qlab.rdagent_instructor.InstructorLiteLLMBackend")
         # fin_factor 的因子程式碼以 `conda run -n <CONDA_DEFAULT_ENV>` 執行（RD-Agent 0.8.0 必填）。
+        # 優先使用 RD-Agent 自動建立的 `rdagent4qlib`（含 pandas/numpy/scipy/tables/qlib 完整堆疊，
+        # CondaConf 解析 bin_path 也最可靠）；`rdagent` 僅當它不存在、或使用者明確指定時才用。
         # 偵測到家目錄的 Miniconda 時自動注入 env 名稱與 PATH（quant 情境走 Docker，不受影響）。
         conda_bin = Path.home() / "miniconda3" / "bin"
+        envs_bin = Path.home() / "miniconda3" / "envs"
         if (conda_bin / "conda").exists():
-            _force_set(env, "CONDA_DEFAULT_ENV", env.get("CONDA_DEFAULT_ENV") or "rdagent")
+            if not env.get("CONDA_DEFAULT_ENV"):
+                default_env = "rdagent4qlib" if (envs_bin / "rdagent4qlib" / "bin").exists() else "rdagent"
+                env["CONDA_DEFAULT_ENV"] = default_env
             if str(conda_bin) not in env.get("PATH", ""):
                 env["PATH"] = f"{conda_bin}:{env.get('PATH', '')}"
+            # 因子執行用 `FACTOR_CoSTEER_SETTINGS.python_bin`（預設 `python`，靠子進程 PATH 解析）。
+            # 若解析到系統 python 會缺 pandas → ModuleNotFound。直接指到 conda env 的 python 絕對路徑根治。
+            env_py = envs_bin / "rdagent4qlib" / "bin" / "python"
+            if not env.get("FACTOR_COSTEER_PYTHON_BIN"):
+                if env_py.exists():
+                    env["FACTOR_COSTEER_PYTHON_BIN"] = str(env_py)
+                elif (envs_bin / "rdagent" / "bin" / "python").exists():
+                    env["FACTOR_COSTEER_PYTHON_BIN"] = str(envs_bin / "rdagent" / "bin" / "python")
         # OpenRouter 無 embedding 端點（DeepSeek 亦無）：embedding 預設改走本地
         # 字元 n-gram 向量（僅用於因子去重相似度）。有真 OpenAI 金鑰時可設 openai。
         _force_set(env, "KSTOCK_EMBEDDING_PROVIDER", env.get("KSTOCK_EMBEDDING_PROVIDER") or "local")

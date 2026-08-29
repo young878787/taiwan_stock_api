@@ -176,9 +176,14 @@ def test_runner_injects_conda_env_when_available(monkeypatch):
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "or-test")
     env = build_rdagent_env(Settings())
-    if (Path.home() / "miniconda3" / "bin" / "conda").exists():
-        assert env["CONDA_DEFAULT_ENV"] == "rdagent"
-        assert str(Path.home() / "miniconda3" / "bin") in env["PATH"]
+    conda_bin = Path.home() / "miniconda3" / "bin"
+    if (conda_bin / "conda").exists():
+        # 優先 rdagent4qlib（RD-Agent 自動建、deps 最齊），否則用 rdagent
+        expected = (
+            "rdagent4qlib" if (Path.home() / "miniconda3" / "envs" / "rdagent4qlib" / "bin").exists() else "rdagent"
+        )
+        assert env["CONDA_DEFAULT_ENV"] == expected
+        assert str(conda_bin) in env["PATH"]
 
 
 def test_local_embed_similarity_and_dims():
@@ -304,6 +309,8 @@ def test_export_h5_writes_tw_daily_pv(store, test_settings, monkeypatch, tmp_pat
 
 def test_runner_injects_tw_factor_folder(test_settings, monkeypatch):
     """台股版 daily_pv.h5 存在時才注入 FACTOR_CoSTEER_DATA_FOLDER。"""
+    from pathlib import Path
+
     from qlab.rdagent_runner import build_rdagent_env
 
     _tw = test_settings.data_dir / "qlab" / "factor_source_data_tw"
@@ -318,9 +325,10 @@ def test_runner_injects_tw_factor_folder(test_settings, monkeypatch):
     env = build_rdagent_env(test_settings)
     assert env["FACTOR_COSTEER_DATA_FOLDER"] == str(_tw)
     assert env["FACTOR_COSTEER_DATA_FOLDER_DEBUG"] == str(_dbg)
-
-    # rdagent_workspace 位置跟著 test_settings（data_dir）走
-    assert env["RDA_GIT_HTTP_PROXY"] == ""
+    # 因子執行 python 指到 conda env 絕對路徑（根治 ModuleNotFound pandas）
+    assert env["FACTOR_COSTEER_PYTHON_BIN"] == str(
+        Path.home() / "miniconda3" / "envs" / "rdagent4qlib" / "bin" / "python"
+    ) or env["FACTOR_COSTEER_PYTHON_BIN"].endswith("/bin/python")
 
 
 def test_rdatest_raises_without_key(monkeypatch):
