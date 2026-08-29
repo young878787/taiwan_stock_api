@@ -60,6 +60,13 @@ def build_rdagent_env(s: Settings | None = None) -> dict[str, str]:
         # 繞過 OpenRouter 免費模型不支援 response_format 的限制。設 KSTOCK_RDA_INSTRUCTOR_BACKEND=0 可關閉。
         if env.get("KSTOCK_RDA_INSTRUCTOR_BACKEND", "1").lower() not in ("0", "false", "no"):
             _force_set(env, "BACKEND", "qlab.rdagent_instructor.InstructorLiteLLMBackend")
+        # fin_factor 的因子程式碼以 `conda run -n <CONDA_DEFAULT_ENV>` 執行（RD-Agent 0.8.0 必填）。
+        # 偵測到家目錄的 Miniconda 時自動注入 env 名稱與 PATH（quant 情境走 Docker，不受影響）。
+        conda_bin = Path.home() / "miniconda3" / "bin"
+        if (conda_bin / "conda").exists():
+            _force_set(env, "CONDA_DEFAULT_ENV", env.get("CONDA_DEFAULT_ENV") or "rdagent")
+            if str(conda_bin) not in env.get("PATH", ""):
+                env["PATH"] = f"{conda_bin}:{env.get('PATH', '')}"
     # 讓 RD-Agent 產物集中在 data/qlab 下（不入版控）
     workdir = Path(settings.data_dir) / "qlab" / "rdagent_workspace"
     workdir.mkdir(parents=True, exist_ok=True)

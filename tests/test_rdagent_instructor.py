@@ -167,6 +167,19 @@ def test_rdatest_uses_instructor(monkeypatch):
     assert captured[0]["model"] == "inclusionai/ling-3.0-flash-fin:free"
 
 
+def test_runner_injects_conda_env_when_available(monkeypatch):
+    """有家目錄 Miniconda 時應注入 CONDA_DEFAULT_ENV 與 PATH（fin_factor 必要）。"""
+    from pathlib import Path
+
+    from qlab.rdagent_runner import build_rdagent_env
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-test")
+    env = build_rdagent_env(Settings())
+    if (Path.home() / "miniconda3" / "bin" / "conda").exists():
+        assert env["CONDA_DEFAULT_ENV"] == "rdagent"
+        assert str(Path.home() / "miniconda3" / "bin") in env["PATH"]
+
+
 def test_rdatest_raises_without_key(monkeypatch):
     import qlab.rdatest as rt
     from types import SimpleNamespace
