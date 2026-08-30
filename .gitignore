@@ -51,3 +51,6 @@ AGENTS.md
 # RD-Agent 執行期產物
 log/
 prompt_cache.db
+
+# 策略資料夾內的可重生因子值（regenerable via qlab backtest）
+strategy/**/*.h5

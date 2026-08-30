@@ -116,7 +116,10 @@ def to_daily_pv(df: pl.DataFrame, max_symbols: int | None = None, adjust: bool =
             if fs is not None:
                 mask = pdf["instrument"] == inst
                 dates = pdf.loc[mask, "datetime"].dt.date
-                factor_col.loc[mask] = dates.map(fs).fillna(1.0).values
+                # yfinance 缺日（兩地假期不同步等）用前後已知因子帶入；
+                # 直接 fillna(1.0) 會在復權序列製造單日跳洞（factor≈0.34 的標的突然回 1.0）
+                mapped = dates.map(fs).ffill().bfill()
+                factor_col.loc[mask] = mapped.fillna(1.0).values
         print(f"  復權因子：{n_adjusted}/{len(sym_list)} 標的成功取得（其餘 fallback 1.0）")
 
     pdf["$factor"] = factor_col
