@@ -1,26 +1,39 @@
-"""fin_factor 因子結果報告匯出。
+"""fin_factor 因子結果報告匯出（含 IC 評估）。
 
 掃描 RD-Agent 因子工作區（``<data>/qlab/rdagent_workspace/git_ignore_folder/RD-Agent_workspace``
 ）中每個因子目錄的 ``result.h5``（因子值）與 ``factor.py``（實作），
-產出 Markdown 報告到 ``<data>/qlab/factor_report.md``。
+並對**前瞻報酬**計算日截面 Rank IC，產出 Markdown 報告到
+``<data>/qlab/factor_report.md``。
 
 用法::
 
     uv run python -m qlab factor-report
+    uv run python -m qlab factor-report --fwd-days 5   # 改前瞻天數
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from kstock.config.settings import settings as kstock_settings
 
 WORKSPACE_DIRNAME = "RD-Agent_workspace"
 REPORT_FILENAME = "factor_report.md"
+
+# 因子值所依據的 daily_pv.h5 候選路徑（$close 用來算前瞻報酬；台股優先、A 股最後）
+_DATA_DIRS = (
+    kstock_settings.data_dir / "qlab" / "factor_source_data_tw_debug" / "daily_pv.h5",
+    kstock_settings.data_dir / "qlab" / "factor_source_data_tw" / "daily_pv.h5",
+    kstock_settings.data_dir / "qlab" / "rdagent_workspace" / "git_ignore_folder"
+    / "factor_implementation_source_data_debug" / "daily_pv.h5",
+    kstock_settings.data_dir / "qlab" / "rdagent_workspace" / "git_ignore_folder"
+    / "factor_implementation_source_data" / "daily_pv.h5",
+)
 
 
 @dataclass(frozen=True)
@@ -34,6 +47,18 @@ class FactorResult:
     stats: dict[str, float]
     sample: str
     success: bool
+    wide: pd.DataFrame = field(default=None, repr=False, compare=False)  # type: ignore[assignment]
+
+
+def _load_price_data() -> pd.DataFrame | None:
+    """載入因子執行所依據的 daily_pv.h5（台股 debug → 台股正式 → 內建 A 股）。"""
+    for p in _DATA_DIRS:
+        if p.exists():
+            try:
+                return pd.read_hdf(p, key="data")
+            except (KeyError, ValueError):
+                continue
+    return None
 
 
 def _load_factor_dir(factor_dir: Path) -> FactorResult | None:
@@ -59,6 +84,7 @@ def _load_factor_dir(factor_dir: Path) -> FactorResult | None:
     instruments = df.index.get_level_values("instrument").nunique()
     dmin = df.index.get_level_values("datetime").min()
     dmax = df.index.get_level_values("datetime").max()
+    wide = df[col].unstack("instrument")
     return FactorResult(
         directory=factor_dir.name,
         factor_name=str(col),
@@ -75,7 +101,63 @@ def _load_factor_dir(factor_dir: Path) -> FactorResult | None:
         },
         sample=values.tail(3).to_string(),
         success=True,
+        wide=wide,
     )
+
+
+def daily_rank_ic(
+    factor_wide: pd.DataFrame,
+    fwd_ret_wide: pd.DataFrame,
+    min_symbols: int = 5,
+) -> pd.Series:
+    """逐日截面 Spearman Rank IC（因子值 vs 前瞻報酬），回傳 IC 時間序列。"""
+    common = factor_wide.index.intersection(fwd_ret_wide.index)
+    ics: list[float] = []
+    dates: list = []
+    for dt in common:
+        f_row = factor_wide.loc[dt].dropna()
+        r_row = fwd_ret_wide.loc[dt].dropna()
+        syms = f_row.index.intersection(r_row.index)
+        if len(syms) < min_symbols:
+            continue
+        ic = f_row[syms].rank().corr(r_row[syms].rank())
+        if not np.isnan(ic):
+            ics.append(float(ic))
+            dates.append(dt)
+    return pd.Series(ics, index=dates, name="rank_ic")
+
+
+def forward_returns(price_df: pd.DataFrame, days: int = 5) -> pd.DataFrame:
+    """由 daily_pv（$close 欄、MultiIndex）計算 N 日前瞻報酬（wide 格式）。"""
+    close = price_df["$close"].unstack("instrument")
+    return close.shift(-days) / close - 1
+
+
+def evaluate_ics(
+    results: list[FactorResult],
+    price_df: pd.DataFrame | None,
+    fwd_days: int = 5,
+) -> dict[str, dict[str, float]]:
+    """對每個因子計算 IC 統計（對 N 日前瞻報酬）。"""
+    if price_df is None:
+        return {}
+    fwd = forward_returns(price_df, days=fwd_days)
+    out: dict[str, dict[str, float]] = {}
+    for r in results:
+        if r.wide is None:
+            continue
+        s = daily_rank_ic(r.wide, fwd)
+        if len(s) < 10 or s.std() == 0:
+            continue
+        ic_mean, ic_std = s.mean(), s.std()
+        out[r.factor_name] = {
+            "ic_mean": float(ic_mean),
+            "icir": float(ic_mean / ic_std) if ic_std else 0.0,
+            "ic_pos_ratio": float((s > 0).mean()),
+            "t_stat": float(ic_mean / (ic_std / np.sqrt(len(s)))) if ic_std else 0.0,
+            "n_days": len(s),
+        }
+    return out
 
 
 def collect_results(workspace: Path | None = None) -> list[FactorResult]:
@@ -93,7 +175,12 @@ def collect_results(workspace: Path | None = None) -> list[FactorResult]:
     return results
 
 
-def build_report(results: list[FactorResult], n_total: int | None = None) -> str:
+def build_report(
+    results: list[FactorResult],
+    n_total: int | None = None,
+    ics: dict[str, dict[str, float]] | None = None,
+    fwd_days: int = 5,
+) -> str:
     """組裝 Markdown 報告。``n_total`` 為演化迴圈中的因子總數（可選）。"""
     lines = [
         "# RD-Agent fin_factor 因子結果報告",
@@ -113,14 +200,44 @@ def build_report(results: list[FactorResult], n_total: int | None = None) -> str
             f"| {r.start} ~ {r.end} | {r.stats['mean']:.4g} | {r.stats['std']:.4g} "
             f"| {r.stats['na_ratio']:.1%} |"
         )
+
+    if ics:
+        lines += [
+            "",
+            f"## IC 評估（對 {fwd_days} 日前瞻報酬的日截面 Rank IC）",
+            "",
+            "判讀：|IC| > 0.03 且 |t| > 2 → 有初步預測力；IC < 0 表示反向（反轉）訊號。",
+            "",
+            "| 因子 | IC 均值 | ICIR | IC>0 比例 | t-stat | 樣本日數 |",
+            "|---|---|---|---|---|---|",
+        ]
+        for name, s in ics.items():
+            ic_str = f"**{s['ic_mean']:.4f}**" if abs(s["ic_mean"]) > 0.01 else f"{s['ic_mean']:.4f}"
+            sig = " 🔥" if abs(s["t_stat"]) > 2 else ""
+            lines.append(
+                f"| `{name}`{sig} | {ic_str} | {s['icir']:.3f} "
+                f"| {s['ic_pos_ratio']:.1%} | {s['t_stat']:.2f} | {s['n_days']} |"
+            )
+        skipped = [r.factor_name for r in results if r.factor_name not in ics]
+        if skipped:
+            lines += ["", f"未評估（樣本不足）：{', '.join(f'`{n}`' for n in skipped)}"]
+
     lines += ["", "## 各因子明細", ""]
     for i, r in enumerate(results, 1):
+        ic_line = "- IC：未評估（價格資料不足）"
+        if ics and r.factor_name in ics:
+            s = ics[r.factor_name]
+            ic_line = (
+                f"- IC：mean={s['ic_mean']:.4f}、ICIR={s['icir']:.3f}、"
+                f"t={s['t_stat']:.2f}（{fwd_days} 日前瞻）"
+            )
         lines += [
             f"### {i}. `{r.factor_name}`（工作區 `{r.directory[:12]}…`）",
             "",
             f"- 資料範圍：{r.start} ~ {r.end}，{r.n_instruments} 個標的，{r.n_rows:,} 列",
             f"- 統計：mean={r.stats['mean']:.4g}、std={r.stats['std']:.4g}、"
             f"min={r.stats['min']:.4g}、max={r.stats['max']:.4g}、NA={r.stats['na_ratio']:.1%}",
+            ic_line,
             "",
             "```",
             r.sample,
@@ -130,10 +247,16 @@ def build_report(results: list[FactorResult], n_total: int | None = None) -> str
     return "\n".join(lines)
 
 
-def export_report(workspace: Path | None = None, output: Path | None = None) -> Path:
+def export_report(
+    workspace: Path | None = None,
+    output: Path | None = None,
+    fwd_days: int = 5,
+) -> Path:
     """產出報告檔，回傳報告路徑。"""
     results = collect_results(workspace)
-    report = build_report(results)
+    price_df = _load_price_data()
+    ics = evaluate_ics(results, price_df, fwd_days=fwd_days)
+    report = build_report(results, ics=ics, fwd_days=fwd_days)
     output = output or kstock_settings.data_dir / "qlab" / REPORT_FILENAME
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(report, encoding="utf-8")

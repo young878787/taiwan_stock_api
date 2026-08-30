@@ -33,6 +33,7 @@ def main(argv: list[str] | None = None) -> int:
         "factor-report", help="匯出 fin_factor 因子結果報告（data/qlab/factor_report.md）"
     )
     p_rdt.add_argument("--output", default=None, help="報告輸出路徑（預設 <data>/qlab/factor_report.md）")
+    p_rdt.add_argument("--fwd-days", type=int, default=5, help="IC 評估的前瞻報酬天數（預設 5）")
 
     p_h5 = sub.add_parser(
         "export-h5", help="台股日K → RD-Agent fin_factor 資料格式（daily_pv.h5，取代內建 A 股資料）"
@@ -71,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
 
         from qlab.factor_report import export_report
 
-        out = export_report(output=Path(ns.output) if ns.output else None)
+        out = export_report(output=Path(ns.output) if ns.output else None, fwd_days=ns.fwd_days)
         print(f"報告已輸出：{out}")
         return 0
 
