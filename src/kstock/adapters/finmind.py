@@ -106,6 +106,12 @@ class FinMindAdapter(DataSourceAdapter):
         )
         records = []
         for row in rows:
+            close = _to_float(_pick(row, "close"))
+            if close is None or close <= 0:
+                # FinMind 對停牌日會回傳 OHLC/量全 0 的「列」而非缺列。
+                # 0 元價格不可能是真實成交，直接略過，避免 0 價污染下游
+                # （inf 報酬、復權因子除零、量能指標失真等）。
+                continue
             records.append(
                 {
                     "symbol": _pick(row, "symbol") or symbol,
@@ -114,7 +120,7 @@ class FinMindAdapter(DataSourceAdapter):
                     "open": _to_float(_pick(row, "open")),
                     "high": _to_float(_pick(row, "high")),
                     "low": _to_float(_pick(row, "low")),
-                    "close": _to_float(_pick(row, "close")),
+                    "close": close,
                     "volume_shares": volume_to_shares(_pick(row, "volume"), unit=self.volume_unit),
                     "turnover_twd": _to_float(_pick(row, "turnover")),
                     "trade_count": _to_int(_pick(row, "trade_count")),

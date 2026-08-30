@@ -89,6 +89,49 @@ def auto_direction(
     return ("top", float(ic.mean())) if ic.mean() >= 0 else ("bottom", float(ic.mean()))
 
 
+def ic_stability(
+    factor_wides: dict[str, pd.DataFrame],
+    price_df: pd.DataFrame,
+    fwd_days: int = 5,
+    is_ratio: float = 0.7,
+) -> dict[str, tuple[float, float, float]]:
+    """IC 樣本穩定性：以時間前 ``is_ratio`` 切分 IS/OOS，回傳 {因子: (IS IC, OOS IC, OOS t 值)}。
+
+    因子皆為 trailing 計算，切片不引入前視；OOS IC 與 IS IC 變號或 |t|<2
+    代表全樣本 auto 方向的 alpha 證據薄弱。
+    """
+    dates = price_df.index.get_level_values("datetime").unique().sort_values()
+    split = int(len(dates) * is_ratio)
+    is_dates, oos_dates = set(dates[:split]), set(dates[split:])
+    fwd = forward_returns(price_df, days=fwd_days)
+    out: dict[str, tuple[float, float, float]] = {}
+    for name, fw in factor_wides.items():
+        is_ic = daily_rank_ic(fw[fw.index.isin(is_dates)], fwd)
+        oos_ic = daily_rank_ic(fw[fw.index.isin(oos_dates)], fwd)
+        if len(oos_ic) < 10 or oos_ic.std() == 0:
+            out[name] = (float(is_ic.mean()) if len(is_ic) else float("nan"), float("nan"), float("nan"))
+            continue
+        t = float(oos_ic.mean() / (oos_ic.std() / np.sqrt(len(oos_ic))))
+        out[name] = (float(is_ic.mean()) if len(is_ic) else float("nan"), float(oos_ic.mean()), t)
+    return out
+
+
+def _resolve_directions(
+    factor_wides: dict[str, pd.DataFrame],
+    price_df: pd.DataFrame | None,
+    direction: str | dict[str, str],
+    fwd_days: int,
+) -> dict[str, str]:
+    """把 direction 參數解析成逐因子乾淨方向（top/bottom），供免成本重跑沿用同訊號。"""
+    if isinstance(direction, dict):
+        return dict(direction)
+    if direction == "auto":
+        if price_df is None:
+            raise ValueError("direction=auto 需要 price_df（daily_pv 長表）以計算 IC")
+        return {name: auto_direction(fw, price_df, fwd_days=fwd_days)[0] for name, fw in factor_wides.items()}
+    return {name: direction for name in factor_wides}
+
+
 def build_signals(
     factor_wide: pd.DataFrame,
     top_n: int,
@@ -197,7 +240,11 @@ def portfolio_daily_returns(
 
 
 def benchmark_daily_returns(close_wide: pd.DataFrame) -> pd.Series:
-    """基準：所有標的等權、每日再平衡的買入持有（不含成本；買入持有成本趨近 0）。"""
+    """基準：所有標的等權、**每日再平衡**的組合日報酬（不含成本）。
+
+    注意：這是「每日再平衡等權」，不是靜態買入持有——標籤以此為準，
+    兩者的再平衡溢價不同，比較時須知悉。
+    """
     return close_wide.pct_change(fill_method=None).mean(axis=1)
 
 
@@ -361,12 +408,12 @@ def _yearly_stats(daily: pd.Series) -> dict[int, tuple[float, float, float]]:
 
 def _yearly_section(
     portfolios: list[tuple[str, pd.Series]],
-    bench_daily: pd.Series,
+    bench_daily: pd.Series | None,
 ) -> list[str]:
     """逐年表現區塊：檢視是否單一年度（暴漲/暴跌）貢獻了全部報酬。"""
-    bench_stats = _yearly_stats(bench_daily)
+    bench_stats = _yearly_stats(bench_daily) if bench_daily is not None and len(bench_daily) else {}
     port_stats = {name: _yearly_stats(daily) for name, daily in portfolios}
-    years = sorted(bench_stats)
+    years = sorted(set(bench_stats) | {y for stats in port_stats.values() for y in stats})
     lines = [
         "",
         "## 逐年表現（年報酬，含成本淨值；括號內為年內夏普）",
@@ -382,8 +429,9 @@ def _yearly_section(
             ret, sharpe, _mdd = port_stats[name].get(y, (float("nan"), float("nan"), float("nan")))
             cells.append(f"{ret:+.1%}（{sharpe:.2f}）")
         b_ret = bench_stats.get(y, (float("nan"),) * 3)[0]
+        b_cell = f"{b_ret:+.1%}" if np.isfinite(b_ret) else "-"
         best = max((port_stats[n].get(y, (float("nan"),))[0] for n, _ in portfolios), default=float("nan"))
-        lines.append(f"| {y} | " + " | ".join(cells) + f" | {b_ret:+.1%} | {best - b_ret:+.1%} |")
+        lines.append(f"| {y} | " + " | ".join(cells) + f" | {b_cell} | {best - b_ret:+.1%} |")
     lines += [
         "",
         "各年度最大回撤：",
@@ -394,7 +442,103 @@ def _yearly_section(
     for y in years:
         cells = [f"{port_stats[n].get(y, (0, 0, float('nan')))[2]:.1%}" for n, _ in portfolios]
         b_mdd = bench_stats.get(y, (0, 0, float("nan")))[2]
-        lines.append(f"| {y} | " + " | ".join(cells) + f" | {b_mdd:.1%} |")
+        b_cell = f"{b_mdd:.1%}" if np.isfinite(b_mdd) else "-"
+        lines.append(f"| {y} | " + " | ".join(cells) + f" | {b_cell} |")
+    return lines
+
+
+def _robustness_section(
+    results: list[PortfolioResult],
+    combined: PortfolioResult,
+    gross_results: list[PortfolioResult] | None,
+    gross_combined: PortfolioResult | None,
+    ic_stability_map: dict[str, tuple[float, float, float]] | None,
+) -> list[str]:
+    """成本與穩健性對照區塊：免成本年化、成本侵蝕、IS/OOS IC。"""
+    gross_map = {r.factor_name: r for r in (gross_results or [])}
+    if gross_combined is not None:
+        gross_map[combined.factor_name] = gross_combined
+    stab = ic_stability_map or {}
+    lines = [
+        "",
+        "## 成本與穩健性對照",
+        "",
+        "免成本＝同訊號、零成本重跑（僅驗證訊號有無 alpha）；IC 以時間前 70% 為 IS、其餘為 OOS。",
+        "",
+        "| 投組 | 淨年化 | 免成本年化 | 成本侵蝕 | IS IC | OOS IC（t 值） |",
+        "|---|---|---|---|---|---|",
+    ]
+    for r in [*results, combined]:
+        g = gross_map.get(r.factor_name)
+        gross_ann = g.annual_return if g is not None else float("nan")
+        erosion = (gross_ann - r.annual_return) * 100.0
+        s = stab.get(r.factor_name)
+        is_ic = f"{s[0]:+.4f}" if s and np.isfinite(s[0]) else "-"
+        oos = f"{s[1]:+.4f}（{s[2]:+.2f}）" if s and np.isfinite(s[1]) else "-"
+        lines.append(
+            f"| `{r.factor_name}` | {r.annual_return:+.1%} | {gross_ann:+.1%} | {erosion:+.1f}pp | {is_ic} | {oos} |"
+        )
+    return lines
+
+
+def _interpretation(
+    combined: PortfolioResult,
+    bench: dict[str, float],
+    bench_daily: pd.Series | None,
+    gross_results: list[PortfolioResult] | None,
+    gross_combined: PortfolioResult | None,
+    ic_stability_map: dict[str, tuple[float, float, float]] | None,
+) -> list[str]:
+    """自動判讀：成本侵蝕、OOS IC 穩定性、報酬集中度、回撤對比。"""
+    lines = ["", "## 判讀", ""]
+    stab = ic_stability_map or {}
+    for name, (is_ic, oos_ic, t) in stab.items():
+        if not np.isfinite(oos_ic):
+            lines.append(f"- `{name}`：OOS IC 樣本不足，無法評估穩定性")
+        elif np.isfinite(is_ic) and (is_ic >= 0) != (oos_ic >= 0):
+            lines.append(
+                f"- `{name}`：⚠️ OOS IC（{oos_ic:+.4f}）與 IS IC（{is_ic:+.4f}）**變號** → 訊號不穩定，勿交易"
+            )
+        elif abs(t) < 2:
+            lines.append(
+                f"- `{name}`：OOS IC 同號但**不顯著**（|t|={abs(t):.2f}<2）→ 樣本外 alpha 證據薄弱，勿以全樣本績效下結論"
+            )
+        else:
+            lines.append(f"- `{name}`：OOS IC 同號且顯著（t={t:+.2f}）→ 有樣本外證據")
+    gc = gross_combined
+    if gc is not None:
+        pp = (gc.annual_return - combined.annual_return) * 100.0
+        if pp > 3:
+            lines.append(
+                f"- 成本侵蝕 {pp:.1f}pp/年（淨 {combined.annual_return:+.1%} vs 免成本 {gc.annual_return:+.1%}）："
+                "顯著，優先拉長再平衡間隔或加大緩衝帶"
+            )
+        elif pp > 0:
+            lines.append(f"- 成本侵蝕 {pp:.1f}pp/年：影響有限")
+        else:
+            lines.append("- 免成本年化未高於淨年化（無成本侵蝕問題）")
+    if bench_daily is not None and len(combined.daily) and len(bench_daily):
+        port_stats = _yearly_stats(combined.daily)
+        bench_stats = _yearly_stats(bench_daily)
+        excess = {
+            y: v[0] - bench_stats.get(y, (float("nan"),))[0] for y, v in port_stats.items()
+        }
+        excess = {y: e for y, e in excess.items() if np.isfinite(e)}
+        if excess:
+            y_best = max(excess, key=lambda y: excess[y])
+            lines.append(
+                f"- 報酬集中度：超額報酬最集中於 {y_best}（{excess[y_best]:+.1%}）；"
+                "若單一年度貢獻過半，需警惕對特定行情的依賴"
+            )
+    if combined.max_drawdown > bench["max_drawdown"]:
+        lines.append(
+            f"- 回撤：策略 MDD {combined.max_drawdown:.1%} **高於**基準 {bench['max_drawdown']:.1%}，"
+            "風險調整後優勢需審視"
+        )
+    else:
+        lines.append(
+            f"- 回撤：策略 MDD {combined.max_drawdown:.1%} 低於基準 {bench['max_drawdown']:.1%}"
+        )
     return lines
 
 
@@ -405,8 +549,15 @@ def build_report(
     direction_used: dict[str, str],
     params: dict[str, str],
     bench_daily: pd.Series | None = None,
+    gross_results: list[PortfolioResult] | None = None,
+    gross_combined: PortfolioResult | None = None,
+    ic_stability_map: dict[str, tuple[float, float, float]] | None = None,
 ) -> str:
-    """組裝 Markdown 回測報告。"""
+    """組裝 Markdown 回測報告。
+
+    ``gross_results``／``gross_combined``：同訊號零成本對照（量化成本侵蝕）；
+    ``ic_stability_map``：{因子: (IS IC, OOS IC, OOS t 值)}（檢驗 auto 方向的穩健性）。
+    """
     lines = [
         "# fin_factor 台股投組回測報告",
         "",
@@ -416,6 +567,11 @@ def build_report(
         "（台股預設來回 0.585% = 0.1425%×2 + 0.3%；借貸成本不計）",
         "- 無前視偏差：t 日收盤後訊號，t+1 日才開始計損益（kstock 回測引擎保證）",
     ]
+    if any("（auto" in str(v) for v in direction_used.values()):
+        lines.append(
+            "- ⚠️ 方向=auto 為**全樣本 in-sample 判斷**（前視）：OOS IC 對照見「成本與穩健性對照」，"
+            "正式評估請用 `--oos 0.7` 或明確指定 --direction top/bottom"
+        )
     n_sym = int(str(params.get("標的數", "0")) or 0)
     if 0 < n_sym <= 20:
         lines.append("- ⚠️ 因子與回測跑在 debug 子集（20 檔），結果僅供管線驗證")
@@ -438,13 +594,15 @@ def build_report(
             f"| {r.avg_turnover:.0%} | {r.trade_count} | {r.win_rate:.0%} |"
         )
     lines.append(
-        f"| 基準（全標的等權買入持有，免成本） | - | {bench['total_return']:+.1%} | {bench['annual_return']:+.1%} "
+        f"| 基準（全標的等權、每日再平衡，免成本） | - | {bench['total_return']:+.1%} | {bench['annual_return']:+.1%} "
         f"| {bench['sharpe']:.2f} | {bench['max_drawdown']:.1%} | {bench['volatility']:.1%} | - | - | - |"
     )
+    lines += _robustness_section(results, combined, gross_results, gross_combined, ic_stability_map)
     lines += _yearly_section(
         [(r.factor_name, r.daily) for r in results] + [(combined.factor_name, combined.daily)],
         bench_daily,
     )
+    lines += _interpretation(combined, bench, bench_daily, gross_results, gross_combined, ic_stability_map)
     return "\n".join(lines) + "\n"
 
 
@@ -519,6 +677,21 @@ def run_backtest_report(
         slippage_rate=slippage_rate,
         fwd_days=fwd_days,
     )
+    # 免成本對照（同訊號、零成本）：量化成本侵蝕；方向沿用淨值版以確保訊號一致
+    gross_dirs = _resolve_directions(factor_wides, price_df, direction, fwd_days)
+    gross_results, gross_combined, _gross_bench, _ = evaluate_portfolios(
+        factor_wides,
+        close_wide,
+        top_n=top_n,
+        rebalance_days=rebalance_days,
+        direction=gross_dirs,
+        buffer_n=buffer_n,
+        commission=0.0,
+        tax=0.0,
+        slippage_rate=0.0,
+        fwd_days=fwd_days,
+    )
+    stab = ic_stability(factor_wides, price_df, fwd_days=fwd_days)
     params = {
         "因子": "、".join(r.factor_name for r in results),
         "top_n": str(top_n),
@@ -540,6 +713,9 @@ def run_backtest_report(
         direction_used,
         params,
         bench_daily=benchmark_daily_returns(close_wide),
+        gross_results=gross_results,
+        gross_combined=gross_combined,
+        ic_stability_map=stab,
     )
     output = output or (kstock_settings.data_dir / "qlab" / BACKTEST_REPORT_FILENAME)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -668,7 +844,7 @@ def run_oos_report(
         f"| {gc.annual_return - oos_bench['annual_return']:+.1%} | - |"
     )
     lines.append(
-        f"| 基準（等權買入持有，免成本） | - | - | {oos_bench['sharpe']:.2f} | {oos_bench['max_drawdown']:.1%} | - | - | - | - | - |"
+        f"| 基準（等權、每日再平衡，免成本） | - | - | {oos_bench['sharpe']:.2f} | {oos_bench['max_drawdown']:.1%} | - | - | - | - | - |"
     )
     lines += [
         "",

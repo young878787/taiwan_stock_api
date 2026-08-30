@@ -53,7 +53,7 @@ def run_backtest(
         signals: 每日收盤後的訊號（1=做多、0=空手、-1=放空），長度 = close 長度。
         close: 每日收盤價序列。
         fee_rate: 單邊手續費率（台股預設 0.1425%）。
-        slippage_rate: 單邊滑價比例。
+        slippage_rate: 單邊滑價比例（於換倉日按換手量扣除，持有期間不計）。
         freq: 年化交易日數（預設 252）。
     """
     if not close:
@@ -73,7 +73,8 @@ def run_backtest(
             continue
         raw_return = prices[i] / prices[i - 1] - 1.0
         turnover = abs(positions[i] - positions[i - 1])
-        strat[i] = positions[i] * (raw_return - slippage_rate) - turnover * fee_rate
+        # 成本只在換倉日按換手量扣除：fee 與滑價皆為單邊費率，來回 = 2×(fee+slippage)
+        strat[i] = positions[i] * raw_return - turnover * (fee_rate + slippage_rate)
 
     equity: list[float] = [1.0]
     for r in strat[1:]:

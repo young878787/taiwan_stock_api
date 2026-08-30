@@ -322,3 +322,108 @@ def test_rerun_factors_on_data(tmp_path):
     wide = out["f"]
     assert wide.shape == (30, 5)
     assert wide.notna().sum().sum() == 145  # 每檔第一日 pct_change 為 NaN（5 檔 × 29）
+
+
+def test_forward_returns_masks_nonpositive_close():
+    """close<=0（壞資料）視為缺價：前瞻報酬不得出現 inf（與回測端口徑一致）。"""
+    from qlab.factor_report import forward_returns
+
+    idx = pd.date_range("2024-01-01", periods=6, freq="D")
+    long = pd.DataFrame(
+        {
+            "datetime": list(idx) * 2,
+            "instrument": ["A"] * 6 + ["B"] * 6,
+            "$close": [10.0, 11.0, 0.0, 12.0, 13.0, 14.0] + [20.0] * 6,
+        }
+    ).set_index(["datetime", "instrument"])
+    fwd = forward_returns(long, days=2)
+    assert np.isinf(fwd.to_numpy()).sum() == 0
+    # A 的 0 價日與其前 2 日（前瞻落入 0 價）皆為 NaN
+    assert fwd["A"].isna().sum() >= 3
+
+
+def test_ic_stability_split_signs():
+    """ic_stability：IS/OOS 切分回傳 (IS IC, OOS IC, OOS t)；穩定因子兩段同號。"""
+    from qlab.factor_backtest import ic_stability
+
+    idx = pd.date_range("2024-01-01", periods=60, freq="D")
+    cols = ["A", "B", "C", "D", "E", "F"]
+    # 各標的不同成長率（A 最強 → F 最弱），確保前瞻報酬排序穩定
+    growth = np.array([1.010, 1.008, 1.006, 0.994, 0.992, 0.990])
+    close = pd.DataFrame(
+        100.0 * np.cumprod(np.tile(growth, (60, 1)), axis=0), index=idx, columns=cols
+    )
+    price_df = close.stack().rename("$close").rename_axis(["datetime", "instrument"]).to_frame()
+    # 因子 = 排序基底 + 雜訊（IC 逐日變動但均值為正）
+    rng = np.random.default_rng(0)
+    base = np.array([3.0, 2.0, 1.0, -1.0, -2.0, -3.0])
+    factor = pd.DataFrame(
+        rng.normal(0, 0.5, (60, 6)) + base, index=idx, columns=cols
+    )
+
+    stab = ic_stability({"f": factor}, price_df, fwd_days=5)
+    is_ic, oos_ic, t = stab["f"]
+    assert is_ic > 0 and oos_ic > 0  # 全期動能方向一致 → 兩段同號
+    assert np.isfinite(t)
+
+
+def test_resolve_directions_auto_and_fixed():
+    from qlab.factor_backtest import _resolve_directions
+
+    idx = pd.date_range("2024-01-01", periods=30, freq="D")
+    cols = ["A", "B", "C", "D", "E", "F"]
+    close = pd.DataFrame(100.0, index=idx, columns=cols)
+    close.loc[:, ["A", "B", "C"]] = 100.0 * (1.01 ** np.arange(30))[:, None]
+    close.loc[:, ["D", "E", "F"]] = 100.0 * (0.99 ** np.arange(30))[:, None]
+    price_df = close.stack().rename("$close").rename_axis(["datetime", "instrument"]).to_frame()
+    factor = pd.DataFrame({c: (1.0 if c in ("A", "B", "C") else 0.0) for c in cols}, index=idx)
+
+    fixed = _resolve_directions({"f": factor}, None, "bottom", 5)
+    assert fixed == {"f": "bottom"}
+    auto = _resolve_directions({"f": factor}, price_df, "auto", 5)
+    assert auto == {"f": "top"}  # 動能為正 → auto 選 top
+
+
+def test_build_report_robustness_and_interpretation():
+    """報告應含免成本對照、OOS IC 欄位、auto 警告與判讀區塊；基準標籤為每日再平衡。"""
+    from qlab.factor_backtest import build_report, evaluate_portfolios
+
+    rng = np.random.default_rng(7)
+    idx = pd.date_range("2024-01-01", periods=80, freq="D")
+    cols = [f"S{i}" for i in range(8)]
+    close = pd.DataFrame(
+        100.0 * np.cumprod(1.0 + rng.normal(0.001, 0.02, (80, 8)), axis=0), index=idx, columns=cols
+    )
+    factor = pd.DataFrame(rng.normal(size=(80, 8)), index=idx, columns=cols)
+
+    results, combined, bench, dirs = evaluate_portfolios(
+        {"f": factor}, close, top_n=3, rebalance_days=5, direction="bottom"
+    )
+    gross_results, gross_combined, _gb, _gd = evaluate_portfolios(
+        {"f": factor}, close, top_n=3, rebalance_days=5, direction="bottom",
+        commission=0.0, tax=0.0,
+    )
+    stab = {"f": (0.05, -0.02, -0.8)}  # 刻意讓 OOS 與 IS 變號
+    params = {"因子": "f", "top_n": "3", "標的數": "8"}
+
+    report = build_report(
+        results, combined, bench, dirs, params,
+        bench_daily=close.pct_change(fill_method=None).mean(axis=1),
+        gross_results=gross_results,
+        gross_combined=gross_combined,
+        ic_stability_map=stab,
+    )
+    assert "成本與穩健性對照" in report
+    assert "免成本年化" in report and "成本侵蝕" in report
+    assert "每日再平衡" in report and "買入持有" not in report
+    assert "變號" in report  # OOS IC 與 IS 變號的判讀
+    assert "報酬集中度" in report and "判讀" in report
+
+    # auto 方向 → 報告頭部需有 in-sample 警告
+    results_a, combined_a, bench_a, dirs_a = evaluate_portfolios(
+        {"f": factor}, close, price_df=close.stack().rename("$close").rename_axis(
+            ["datetime", "instrument"]).to_frame(),
+        top_n=3, rebalance_days=5, direction="auto",
+    )
+    report_a = build_report(results_a, combined_a, bench_a, dirs_a, params)
+    assert "in-sample" in report_a and "auto" in report_a

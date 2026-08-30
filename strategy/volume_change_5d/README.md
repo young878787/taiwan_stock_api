@@ -57,7 +57,9 @@ LLM（RD-Agent fin_factor、ling-3.0-flash-fin）自動演化出的第一個通�
 - 來源/排列/數值全量比對：**400,923 列與 parquet 資料庫零誤差**；MultiIndex 單調、無重複、交易日對齊
 - **復權因子 2026-08-30 根治**：改用 FinMind `TaiwanStockDividend` 除權息事件自算（向後調整、291/300 標的有事件），
   取代 yfinance Adj Close/Close（缺事件造成 214 次復權跳動）；修復後除息零殘留
-- 兩項已知限制：① 112 列 close=0（上游停牌日記 0，回測端視為缺價）② 6 次復權跳動屬減資/分割/面額變更（0.0015%，量能因子免疫）
+- 已知限制：6 次復權跳動屬減資/分割/面額變更（0.0015%，量能因子免疫）。
+  close=0（FinMind 停牌日全零列，112 列）已於 2026-08-30 **從源頭根治**：`FinMindAdapter.get_daily_bars`
+  直接過濾停牌零列，存量 parquet 與 daily_pv.h5 亦已清理（400,923 → 400,811 列）
 - 此前修復：export-h5 復權因子缺日由 fallback 1.0 改為前後帶入（`ffill`），消除 3,164 列 factor 洞
 
 ## 檔案

@@ -1,3 +1,5 @@
+import datetime
+
 from kstock.adapters.finmind import FinMindAdapter
 
 import polars as pl
@@ -56,6 +58,41 @@ def test_get_daily_bars_empty_returns_typed_schema(monkeypatch):
     assert df.height == 0
     assert "volume_shares" in df.columns
     assert "source" in df.columns
+
+
+def test_get_daily_bars_drops_suspension_zero_rows(monkeypatch):
+    """FinMind 停牌日回傳 OHLC/量全 0 的列（非缺列）→ adapter 應略過，不入庫。"""
+    adapter = _make()
+    rows = [
+        *_price_rows(),
+        {
+            "stock_id": "2330",
+            "date": "2024-01-04",
+            "open": 0.0,
+            "max": 0.0,
+            "min": 0.0,
+            "close": 0.0,
+            "Trading_Volume": 0,
+            "Trading_money": 0,
+            "Trading_tickets": 0,
+        },
+        {  # close 缺值（_to_float → 0）同樣視為無效列
+            "stock_id": "2330",
+            "date": "2024-01-05",
+            "open": 500.0,
+            "max": 505.0,
+            "min": 495.0,
+            "close": None,
+            "Trading_Volume": 1000,
+            "Trading_money": 500_000,
+            "Trading_tickets": 100,
+        },
+    ]
+    monkeypatch.setattr(adapter, "_get_json", lambda params: rows)
+    df = adapter.get_daily_bars("2330", "2024-01-01", "2024-01-31")
+    assert df.height == 2  # 只留兩個有效交易日
+    assert df["close"].to_list() == [598.0, 590.0]
+    assert df["date"].to_list() == [datetime.date(2024, 1, 2), datetime.date(2024, 1, 3)]
 
 
 def test_volume_unit_shares_no_multiply(monkeypatch):

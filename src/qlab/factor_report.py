@@ -133,8 +133,13 @@ def daily_rank_ic(
 
 
 def forward_returns(price_df: pd.DataFrame, days: int = 5) -> pd.DataFrame:
-    """由 daily_pv（$close 欄、MultiIndex）計算 N 日前瞻報酬（wide 格式）。"""
+    """由 daily_pv（$close 欄、MultiIndex）計算 N 日前瞻報酬（wide 格式）。
+
+    壞資料防禦：close <= 0（停牌誤植等）視為缺價，避免產生 inf/爆量前瞻報酬
+    毒化 Rank IC（與回測端的 close_wide.mask 口徑一致）。
+    """
     close = price_df["$close"].unstack("instrument")
+    close = close.mask(close <= 0.0)
     return close.shift(-days) / close - 1
 
 

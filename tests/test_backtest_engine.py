@@ -33,6 +33,28 @@ def test_fee_reduces_return():
     assert with_fee.total_return < no_fee.total_return
 
 
+def test_slippage_charged_on_trade_day_only():
+    """滑價只在換倉日按換手量扣一次，持有期間不得重複扣。"""
+    close = [100, 101, 103, 103, 110]
+    res = run_backtest([1] * 5, close, fee_rate=0.0, slippage_rate=0.001)
+    # 進場日（第 1 日）扣一次 0.001，之後持有日不再扣
+    assert res.equity[1] == pytest.approx(1.01 - 0.001)
+    assert res.equity[-1] == pytest.approx((1.01 - 0.001) * (103 / 101) * (110 / 103))
+
+
+def test_slippage_round_trip_two_sides():
+    close = [100, 100, 100, 100, 100]
+    res = run_backtest([1, 1, 1, 0, 0], close, fee_rate=0.0, slippage_rate=0.001)
+    # 進場 + 出場各扣一次滑價，價格無變動
+    assert res.total_return == pytest.approx((1 - 0.001) ** 2 - 1, rel=1e-9)
+
+
+def test_no_slippage_without_trades():
+    close = [100, 100, 100, 100, 100]
+    res = run_backtest([0] * 5, close, fee_rate=0.0, slippage_rate=0.001)
+    assert res.total_return == pytest.approx(0.0)
+
+
 def test_trade_count_counts_position_changes():
     res = run_backtest([1, 0, 1, 0, 1], [100] * 5, fee_rate=0.0)
     assert res.trade_count == 4
