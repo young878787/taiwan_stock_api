@@ -205,3 +205,52 @@ def test_auto_direction_uses_ic_sign():
     direction, ic = auto_direction(factor, price_df, fwd_days=5)
     assert direction == "top"
     assert ic > 0
+
+
+def test_rerun_factors_on_data(tmp_path):
+    """在指定資料集上重跑 factor.py（RD-Agent 約定：讀 daily_pv.h5、寫 result.h5）。"""
+    import textwrap
+
+    from qlab.factor_backtest import rerun_factors_on_data
+
+    idx = pd.date_range("2024-01-01", periods=30, freq="D")
+    cols = [f"S{i}" for i in range(5)]
+    price = pd.DataFrame(
+        100.0 * (1.0 + 0.01 * np.sin(np.arange(30)))[:, None].repeat(5, axis=1),
+        index=idx,
+        columns=cols,
+    )
+    long = price.stack().rename("$close").rename_axis(["datetime", "instrument"]).to_frame()
+    data_h5 = tmp_path / "daily_pv.h5"
+    long.to_hdf(data_h5, key="data")
+
+    # 假工作區：一個「LLM 生成」的 factor.py + 既有 result.h5（collect_results 靠它識別因子名）
+    ws = tmp_path / "RD-Agent_workspace" / "abc123"
+    ws.mkdir(parents=True)
+    (ws / "factor.py").write_text(
+        textwrap.dedent(
+            """
+            import pandas as pd
+
+            def run():
+                df = pd.read_hdf('daily_pv.h5')
+                df['f'] = df.groupby(level='instrument')['$close'].pct_change()
+                df[['f']].to_hdf('result.h5', key='data')
+
+            if __name__ == '__main__':
+                run()
+            """
+        ),
+        encoding="utf-8",
+    )
+    prior = long.copy()
+    prior["f"] = prior.groupby(level="instrument")["$close"].pct_change()
+    prior[["f"]].to_hdf(ws / "result.h5", key="data")
+
+    out = rerun_factors_on_data(
+        ("f",), data_h5, tmp_path / "work", workspace=tmp_path / "RD-Agent_workspace"
+    )
+    assert "f" in out
+    wide = out["f"]
+    assert wide.shape == (30, 5)
+    assert wide.notna().sum().sum() == 145  # 每檔第一日 pct_change 為 NaN（5 檔 × 29）

@@ -64,8 +64,29 @@ def main(argv: list[str] | None = None) -> int:
     p_bt.add_argument(
         "--gross", action="store_true", help="免成本模式（commission/tax/slippage 全 0），僅供訊號驗證"
     )
+
+    p_vd = sub.add_parser(
+        "verify-data", help="驗證 daily_pv.h5 與 kstock 台股 parquet 資料庫一致（來源/排列/數值）"
+    )
+    p_vd.add_argument("--h5", default=None, help="h5 路徑（預設 factor_source_data_tw/daily_pv.h5）")
+    p_bt.add_argument(
+        "--oos",
+        type=float,
+        default=None,
+        metavar="RATIO",
+        help="樣本外驗證：前 RATIO 期間定方向（如 0.7），其餘為 OOS 回測（輸出 oos_backtest_report.md）",
+    )
     p_bt.add_argument("--fwd-days", type=int, default=5, help="auto 方向判斷的 IC 前瞻天數（預設 5）")
     p_bt.add_argument("--output", default=None, help="報告輸出路徑（預設 <data>/qlab/backtest_report.md）")
+    p_bt.add_argument(
+        "--data", default=None, help="價格 h5 路徑（預設 factor_report 候選：debug 20 檔優先）"
+    )
+    p_bt.add_argument(
+        "--top-symbols",
+        type=int,
+        default=None,
+        help="只取前 N 檔（依代碼排序）當宇宙，因子值會在該子集上重跑（例：--top-symbols 100）",
+    )
 
     ns = parser.parse_args(argv)
 
@@ -102,25 +123,42 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if ns.command == "backtest":
-        from qlab.factor_backtest import run_backtest_report
+        from qlab.factor_backtest import run_backtest_report, run_oos_report
 
         factor_names = tuple(f.strip() for f in ns.factors.split(",")) if ns.factors else None
-        if ns.gross:
-            commission = tax = slippage = 0.0
-        else:
-            commission, tax, slippage = ns.commission, ns.tax, ns.slippage
-        out = run_backtest_report(
+        common = dict(
             factor_names=factor_names,
             top_n=ns.top_n,
             rebalance_days=ns.rebalance_days,
-            direction=ns.direction,
-            commission=commission,
-            tax=tax,
-            slippage_rate=slippage,
-            fwd_days=ns.fwd_days,
-            output=Path(ns.output) if ns.output else None,
+            commission=0.0 if ns.gross else ns.commission,
+            tax=0.0 if ns.gross else ns.tax,
+            slippage_rate=0.0 if ns.gross else ns.slippage,
+            data=Path(ns.data) if ns.data else None,
+            top_symbols=ns.top_symbols,
         )
+        if ns.oos is not None:
+            if not 0.1 < ns.oos < 0.9:
+                parser.error("--oos RATIO 需在 0.1~0.9 之間")
+            out = run_oos_report(
+                fwd_days=ns.fwd_days,
+                is_ratio=ns.oos,
+                output=Path(ns.output) if ns.output else None,
+                **common,
+            )
+        else:
+            out = run_backtest_report(
+                fwd_days=ns.fwd_days,
+                direction=ns.direction,
+                output=Path(ns.output) if ns.output else None,
+                **common,
+            )
         print(f"回測報告已輸出：{out}")
+        return 0
+
+    if ns.command == "verify-data":
+        from qlab.data_check import verify_daily_pv
+
+        print(verify_daily_pv(Path(ns.h5) if ns.h5 else None))
         return 0
 
     if ns.command == "rdatest":

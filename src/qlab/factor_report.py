@@ -20,6 +20,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+try:  # pytables 的損壞/空檔錯誤（HDF5ExtError 不是 OSError 子類）
+    from tables.exceptions import HDF5ExtError as _HdfError
+except ImportError:  # pragma: no cover
+    _HdfError = OSError  # type: ignore[assignment]
+
 from kstock.config.settings import settings as kstock_settings
 
 WORKSPACE_DIRNAME = "RD-Agent_workspace"
@@ -71,7 +76,7 @@ def _load_factor_dir(factor_dir: Path) -> FactorResult | None:
         try:
             df = pd.read_hdf(result_file, key=key)
             break
-        except (KeyError, ValueError):
+        except (KeyError, ValueError, OSError, _HdfError):
             continue
     if df is None:
         return None
