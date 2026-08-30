@@ -222,6 +222,39 @@ def test_build_signals_buffer_keeps_holding():
     assert t2 == pytest.approx(0.0)
 
 
+def test_dividend_factor_column_formula():
+    """FinMind 除權息事件 → 向後調整因子：除權息日 adj 應平滑。"""
+    from qlab.export_h5 import _dividend_factor_column
+
+    dates = pd.date_range("2024-06-20", periods=10, freq="D")
+    # S1：ex-day 2024-06-25 現金股利 2 元，除息前收盤 100 → f = 1 - 2/100 = 0.98
+    closes = [100.0, 101.0, 99.0, 100.0, 100.0, 98.0, 99.0, 100.0, 101.0, 100.0]
+    pdf = pd.DataFrame(
+        {
+            "datetime": list(dates) * 2,
+            "instrument": ["TSE0001"] * 10 + ["TSE0002"] * 10,
+            "close": closes + [50.0] * 10,
+        }
+    )
+    events = {"TSE0001": [(pd.Timestamp("2024-06-25").date(), 2.0, 0.0)]}
+    fac = _dividend_factor_column(pdf, events)
+
+    got = fac[fac.index[:10]]
+    assert got.iloc[-5:].tolist() == [1.0] * 5  # 除息日（含）之後 factor=1
+    assert got.iloc[:5].tolist() == [0.98] * 5  # 除息日之前全部乘 0.98（向後調整）
+    # adj = close × factor 在除息日平滑：100×0.98 = 98 = 98×1.0
+    adj = pdf["close"].iloc[:10] * got.to_numpy()
+    assert adj.iloc[4] == pytest.approx(adj.iloc[5])
+    # 無事件標的全為 1
+    assert (fac[fac.index[10:]] == 1.0).all()
+
+    # 股票股利：配股率 0.1 → f = 1/1.1
+    events2 = {"TSE0001": [(pd.Timestamp("2024-06-25").date(), 0.0, 0.1)]}
+    fac2 = _dividend_factor_column(pdf, events2)
+    assert fac2[fac2.index[0]] == pytest.approx(1 / 1.1)
+    assert fac2[fac2.index[9]] == pytest.approx(1.0)
+
+
 def test_auto_direction_uses_ic_sign():
     from qlab.factor_backtest import auto_direction
 

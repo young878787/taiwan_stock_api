@@ -20,9 +20,13 @@ fin_factor 期望的格式，並透過環境變數把 ``FACTOR_CoSTEER_DATA_FOLD
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
+from typing import Any
 
+import numpy as np
 import pandas as pd
 import polars as pl
 
@@ -83,7 +87,97 @@ def _fetch_adjust_factors(
     return out
 
 
-def to_daily_pv(df: pl.DataFrame, max_symbols: int | None = None, adjust: bool = True) -> pd.DataFrame:
+def _num(value: Any) -> float:
+    """FinMind 欄位 → float（空字串/None/非數字回 0）。"""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return f if f == f else 0.0  # NaN 防禦
+
+
+def _fetch_dividend_events(
+    symbols: list[tuple[str, str]], start: str
+) -> dict[str, list[tuple[Any, float, float]]]:
+    """用 FinMind ``TaiwanStockDividend`` 抓除權息事件。
+
+    回傳 {instrument: [(ex_date, cash_per_share, stock_ratio), ...]}：
+    - ex_date：除權息交易日（現金/股票股利擇一有值即為事件日）
+    - cash_per_share：每股現金股利（元）
+    - stock_ratio：每股配股率（股）；FinMind 股票股利欄位以面額 10 元記載 → /10
+    抓不到的標的不會出現在回傳中（呼叫端視為無事件 → factor=1.0）。
+    """
+    from kstock.adapters.finmind import FinMindAdapter
+
+    adapter = FinMindAdapter()
+    out: dict[str, list[tuple[Any, float, float]]] = {}
+    for market, sym in symbols:
+        instrument = f"{market}{sym}"
+        try:
+            rows = adapter.fetch_rows("TaiwanStockDividend", data_id=sym, start_date=start)
+        except Exception:
+            continue
+        events = []
+        for r in rows:
+            cash = _num(r.get("CashEarningsDistribution")) + _num(r.get("CashStatutorySurplus"))
+            stock = _num(r.get("StockEarningsDistribution")) + _num(r.get("StockStatutorySurplus"))
+            ratio = stock / 10.0  # 面額 10 元 → 配股率
+            ex = r.get("CashExDividendTradingDate") or r.get("StockExDividendTradingDate")
+            if not ex:
+                continue
+            try:
+                ex_date = datetime.strptime(ex, "%Y-%m-%d").date()
+            except (TypeError, ValueError):
+                continue
+            if cash <= 0 and ratio <= 0:
+                continue
+            events.append((ex_date, cash, ratio))
+        if events:
+            out[instrument] = sorted(events, key=lambda e: e[0])
+        time.sleep(0.1)  # 禮貌性節流（FinMind 有頻率限制）
+    return out
+
+
+def _dividend_factor_column(
+    pdf: pd.DataFrame, events_map: dict[str, list[tuple[Any, float, float]]]
+) -> pd.Series:
+    """由除權息事件計算逐列復權因子（向後調整：最新日期 factor=1）。
+
+    除權息參考價公式：ref = (prev_close - cash) / (1 + stock_ratio)，
+    單次調整因子 f = ref / prev_close；所有早於除息日的日期累積乘上 f，
+    使 adj = close × factor 在除息日平滑（與 yfinance 的回調語意一致）。
+    """
+    factor = pd.Series(1.0, index=pdf.index, name="$factor")
+    for inst, events in events_map.items():
+        mask = pdf["instrument"] == inst
+        sub = pdf.loc[mask].sort_values("datetime")
+        dates = sub["datetime"].dt.date.to_numpy()
+        closes = sub["close"].to_numpy(dtype=float)
+        fac = np.ones(len(sub))
+        for ex_date, cash, ratio in events:
+            idx = int(np.searchsorted(dates, ex_date))
+            # 前一個有效收盤（停牌 0 收盤跳過）
+            j = idx - 1
+            while j >= 0 and not (closes[j] > 0):
+                j -= 1
+            if j < 0:
+                continue
+            prev_close = closes[j]
+            if prev_close <= cash / 10:  # 極端防禦：參考價不應為負或近零
+                continue
+            f = (1.0 - cash / prev_close) / (1.0 + ratio)
+            f = min(max(f, 0.05), 1.0)  # 除權息只會讓參考價低於前收盤
+            fac[:idx] *= f
+        factor.loc[sub.index] = fac
+    return factor
+
+
+def to_daily_pv(
+    df: pl.DataFrame,
+    max_symbols: int | None = None,
+    adjust: bool = True,
+    adjust_source: str = "finmind",
+) -> pd.DataFrame:
     """台股日K Polars DataFrame → fin_factor 期望的 pandas 格式（含復權因子）。"""
     if max_symbols is not None:
         keep = df["symbol"].unique().sort()[:max_symbols]
@@ -107,6 +201,18 @@ def to_daily_pv(df: pl.DataFrame, max_symbols: int | None = None, adjust: bool =
     if adjust:
         sym_list = list(pdf[["market", "symbol"]].drop_duplicates().itertuples(index=False, name=None))
         start = pdf["datetime"].min().strftime("%Y-%m-%d")
+        if adjust_source == "finmind":
+            events = _fetch_dividend_events(sym_list, start)
+            if events:
+                factor_col = _dividend_factor_column(pdf, events)
+                n_adjusted = len(events)
+                print(
+                    f"  復權因子（FinMind 除權息）：{n_adjusted}/{len(sym_list)} 標的有事件（其餘 factor=1.0）"
+                )
+                pdf["$factor"] = factor_col
+                out = pdf.set_index(["datetime", "instrument"])[PRICE_COLUMNS].sort_index()
+                return out
+            print("  FinMind 除權息事件取得失敗，fallback 至 yfinance")
         end = (pdf["datetime"].max() + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
         adj_map = _fetch_adjust_factors(sym_list, start, end)
         n_adjusted = len(adj_map)
@@ -120,7 +226,7 @@ def to_daily_pv(df: pl.DataFrame, max_symbols: int | None = None, adjust: bool =
                 # 直接 fillna(1.0) 會在復權序列製造單日跳洞（factor≈0.34 的標的突然回 1.0）
                 mapped = dates.map(fs).ffill().bfill()
                 factor_col.loc[mask] = mapped.fillna(1.0).values
-        print(f"  復權因子：{n_adjusted}/{len(sym_list)} 標的成功取得（其餘 fallback 1.0）")
+        print(f"  復權因子（yfinance）：{n_adjusted}/{len(sym_list)} 標的成功取得（其餘 fallback 1.0）")
 
     pdf["$factor"] = factor_col
     out = pdf.set_index(["datetime", "instrument"])[PRICE_COLUMNS].sort_index()
@@ -132,15 +238,20 @@ def export_daily_pv(
     debug_dir: Path | None = None,
     debug_symbols: int = 20,
     adjust: bool = True,
+    adjust_source: str = "finmind",
 ) -> tuple[ExportReport, ExportReport]:
-    """產出台股版 daily_pv.h5（正式版 + debug 子集）與資料說明 README.md。"""
+    """產出台股版 daily_pv.h5（正式版 + debug 子集）與資料說明 README.md。
+
+    ``adjust_source``：finmind（預設，用 TaiwanStockDividend 自算，除息事件覆蓋完整）
+    或 yfinance（Adj Close/Close，缺事件時 adj 會跳動）。
+    """
     df = _load_daily()
     base = output_dir or kstock_settings.data_dir / "qlab" / "factor_source_data_tw"
     dbg = debug_dir or kstock_settings.data_dir / "qlab" / "factor_source_data_tw_debug"
 
     reports: list[ExportReport] = []
     for target, max_symbols in ((base, None), (dbg, debug_symbols)):
-        pv = to_daily_pv(df, max_symbols=max_symbols, adjust=adjust)
+        pv = to_daily_pv(df, max_symbols=max_symbols, adjust=adjust, adjust_source=adjust_source)
         target.mkdir(parents=True, exist_ok=True)
         pv.to_hdf(target / "daily_pv.h5", key="data")
         (target / "README.md").write_text(_README_TW, encoding="utf-8")

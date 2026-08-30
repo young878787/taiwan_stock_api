@@ -144,24 +144,29 @@ def verify_daily_pv(h5_path: Path | None = None) -> str:
     _add(
         "無 factor 缺日洞（孤立 1.0）",
         isolated == 0,
-        f"{isolated} 列（前後日因子都 <0.9 卻單日 =1.0）——yfinance 缺日 fallback 所致，會讓復權價單日假跳",
+        f"{isolated} 列（前後日因子都 <0.9 卻單日 =1.0）——缺日 fallback 所致，會讓復權價單日假跳",
     )
 
-    # 復權價日跳動：台股漲跌停 10%，>60% 必為資料異常。
-    # 主要來源＝yfinance 除權息事件覆蓋不全（除息日未回調），佔比極低（~0.05%）；
-    # 根治需改用 FinMind 除權息表自算 factor，量能類因子（$volume）不受影響。
-    adj_close = pv_sorted["$close"] * pv_sorted["$factor"]
-    adj_ret = adj_close.groupby(level="instrument").pct_change()
-    big_mask = adj_ret.abs() > 0.6
+    # 復權價日跳動：台股漲跌停 10%，>60% 必為異常。
+    # 先排除「停牌 0 收盤」相鄰的跳動（上游停牌資料，見 close≤0 檢查項），
+    # 剩餘者為除權息未回調等真異常（FinMind 事件法下應為 0）。
+    close_s = pv_sorted["$close"]
+    adj_close = close_s * pv_sorted["$factor"]
+    adj_ret = adj_close.groupby(level="instrument").pct_change(fill_method=None)
+    prev_close = close_s.groupby(level="instrument").shift(1)
+    next_close = close_s.groupby(level="instrument").shift(-1)
+    zero_adjacent = (close_s <= 0) | (prev_close <= 0) | (next_close <= 0)
+    big_mask = (adj_ret.abs() > 0.6) & ~zero_adjacent.reindex(adj_ret.index).fillna(False)
     big = int(big_mask.sum())
     n_syms = int(big_mask.groupby(level="instrument").any().sum())
-    ratio = big / max(len(pv_sorted), 1)
-    status = "✅" if big == 0 else ("⚠️" if ratio < 0.002 else "❌")
+    n_zero_jumps = int(((adj_ret.abs() > 0.6) & zero_adjacent.reindex(adj_ret.index).fillna(True)).sum())
+    status = "✅" if big == 0 else ("⚠️" if big < len(pv_sorted) * 0.002 else "❌")
     results.append(
         (
-            "復權價日跳動 >60%（yfinance 除息事件覆蓋限制）",
+            "復權價非停牌日跳動 >60%（除權息未回調等）",
             status,
-            f"{big} 次 / {n_syms} 檔（佔 {ratio:.3%}）",
+            f"{big} 次 / {n_syms} 檔（另有 {n_zero_jumps} 次停牌 0 收盤造成的跳動，歸上游資料）；"
+            "殘留者通常為減資/股票分割/面額變更（FinMind TaiwanStockCapitalReductionReferencePrice / ParValueChange 可再涵蓋）",
         )
     )
     f_min, f_max = float(pv["$factor"].min()), float(pv["$factor"].max())

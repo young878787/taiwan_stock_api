@@ -40,7 +40,13 @@ def main(argv: list[str] | None = None) -> int:
         "export-h5", help="台股日K → RD-Agent fin_factor 資料格式（daily_pv.h5，取代內建 A 股資料）"
     )
     p_h5.add_argument("--debug-symbols", type=int, default=20, help="debug 子集標的數（預設 20）")
-    p_h5.add_argument("--no-adjust", action="store_true", help="不做復權（$factor=1.0，跳過 yfinance 抓取）")
+    p_h5.add_argument("--no-adjust", action="store_true", help="不做復權（$factor=1.0，跳過抓取）")
+    p_h5.add_argument(
+        "--adjust-source",
+        default="finmind",
+        choices=["finmind", "yfinance"],
+        help="復權因子來源：finmind=除權息事件自算（預設、事件覆蓋完整）；yfinance=Adj Close/Close",
+    )
 
     p_bt = sub.add_parser(
         "backtest", help="fin_factor 因子 → 台股橫截面投組回測（data/qlab/backtest_report.md）"
@@ -117,7 +123,9 @@ def main(argv: list[str] | None = None) -> int:
     if ns.command == "export-h5":
         from qlab.export_h5 import export_daily_pv
 
-        full, debug = export_daily_pv(debug_symbols=ns.debug_symbols, adjust=not ns.no_adjust)
+        full, debug = export_daily_pv(
+            debug_symbols=ns.debug_symbols, adjust=not ns.no_adjust, adjust_source=ns.adjust_source
+        )
         print(f"正式版：{full.path}（{full.n_rows:,} 列 / {full.n_symbols} 標的 / {full.start}~{full.end} / 復權 {full.n_adjusted} 檔）")
         print(f"debug 版：{debug.path}（{debug.n_rows:,} 列 / {debug.n_symbols} 標的 / 復權 {debug.n_adjusted} 檔）")
         return 0
