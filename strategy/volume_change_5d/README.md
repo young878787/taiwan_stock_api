@@ -6,6 +6,7 @@ LLM（RD-Agent fin_factor、ling-3.0-flash-fin）自動演化出的第一個通�
 
 - **因子**：`volume_change_5d` = 近 5 日成交量變化（詳見 `factor.py`，RD-Agent 生成的原始碼）
 - **訊號**：每 20 個交易日，對台股前 100 檔（依代碼排序）計算因子並排名，**買進量能變化最小的 5 檔**（反轉：量能萎縮 → 之後補漲），等權 1/5
+- **緩衝帶**：持倉跌出前 10 名才換股（`--buffer 10`），掃描 5/10/15/20/30 名後選定的甜蜜點（夏普最高、回撤最低）
 - **成本**：手續費 0.1425%×2 + 證交稅 0.3%（來回 0.585%），台股純現金，不計借貸成本
 - **無前視偏差**：t 日收盤訊號、t+1 日生效（kstock 回測引擎保證，見 `test_portfolio_backtest_no_lookahead`）
 
@@ -18,13 +19,16 @@ LLM（RD-Agent fin_factor、ling-3.0-flash-fin）自動演化出的第一個通�
 | 因子資料依賴 | 只用 `$volume`，**免疫於復權因子缺陷**（見下方資料驗證） |
 | 同批對照 | `ma_deviation_20d`（價格類）OOS IC 消失（t=0.57），判定 in-sample 假象而淘汰 |
 
-## 績效（2021-01 ~ 2026-08，台股前 100 檔、top-5、20 日再平衡、含成本）
+## 績效（2021-01 ~ 2026-08，台股前 100 檔、top-5、20 日再平衡、緩衝帶 10 名、含成本）
 
 | 指標 | 策略 | 基準（等權買入持有） |
 |---|---|---|
-| 年化報酬 | **+39.3%** | +25.9% |
-| 夏普 | **1.25** | 1.14 |
+| 年化報酬 | **+43.9%** | +25.9% |
+| 夏普 | **1.36** | 1.14 |
 | 最大回撤 | **28.1%** | 34.1% |
+| 換倉比例/次 | 89% | - |
+
+緩衝帶效果（無緩衝 → buffer 10）：年化 +39.3% → +43.9%、夏普 1.25 → 1.36，換倉 95% → 89%。
 
 ### 逐年（排除單一年度暴漲/暴跌的疑慮）
 
@@ -43,8 +47,9 @@ LLM（RD-Agent fin_factor、ling-3.0-flash-fin）自動演化出的第一個通�
 
 ### 樣本外（OOS 2024-12 ~ 2026-08，方向僅由 IS 決定）
 
-- OOS 淨年化 +37.9%、夏普 1.07；同期基準 +50.9%（多頭大行情）→ 相對超額 -13.0%
-- **訊號真實存活**（OOS t=-2.93），但相對 buy-and-hold 尚未轉正——改善方向：緩衝帶壓換倉（目前 95%/次）
+- OOS 淨年化 +41.3%、夏普 1.14；同期基準 +50.9%（多頭大行情）→ 相對超額 -9.6%
+- **訊號真實存活**（OOS t=-2.93），但相對 buy-and-hold 尚未轉正——2025~2026 為罕見大多頭，等權買入持有極難打敗
+- 逐年表現（見 backtest_report.md）顯示 2022 空年策略 -1.6% vs 基準 -15.8%，防禦特性明確
 
 ## 資料來源驗證（`data_check_report.md`，14 項檢查）
 
@@ -68,10 +73,10 @@ LLM（RD-Agent fin_factor、ling-3.0-flash-fin）自動演化出的第一個通�
 ```bash
 uv run python -m qlab backtest --top-symbols 100 \
   --data data/qlab/factor_source_data_tw/daily_pv.h5 \
-  --factors volume_change_5d
+  --factors volume_change_5d --buffer 10
 uv run python -m qlab backtest --top-symbols 100 \
   --data data/qlab/factor_source_data_tw/daily_pv.h5 \
-  --factors volume_change_5d --oos 0.7
+  --factors volume_change_5d --buffer 10 --oos 0.7
 uv run python -m qlab verify-data
 ```
 

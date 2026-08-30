@@ -94,32 +94,48 @@ def build_signals(
     top_n: int,
     rebalance_days: int,
     direction: str,
+    buffer_n: int | None = None,
 ) -> tuple[pd.DataFrame, float]:
     """由因子值建立每日持倉訊號（1=持有多方 slot、0=空手）。
 
     再平衡日 = 因子索引每隔 ``rebalance_days`` 列；訊號在再平衡日收盤後產生，
     由回測引擎延後一天生效，因此此處不需再 shift。
+
+    緩衝帶（``buffer_n`` > ``top_n`` 時）：既有持倉只要排名仍在 buffer_n 內就續抱，
+    跌出才賣；空出的 slot 由排名最佳的非持倉補上（同樣限 buffer_n 內）。
+    目的：降低換倉比例、壓低台股雙邊交易成本。
     回傳 (訊號表, 平均每次再平衡換倉比例)。
     """
     if direction not in ("top", "bottom"):
         raise ValueError(f"direction 必須是 top/bottom，收到 {direction!r}")
+    band = buffer_n or top_n
+    if band < top_n:
+        raise ValueError(f"buffer_n（{band}）不可小於 top_n（{top_n}）")
+    ascending = direction == "bottom"  # bottom=買最小者 → rank 1 = 最小
     sig = pd.DataFrame(0.0, index=factor_wide.index, columns=factor_wide.columns)
     turnovers: list[float] = []
     prev_picks: set | None = None
     row_pos = list(range(0, len(factor_wide.index), rebalance_days))
     for k, start in enumerate(row_pos):
         end = row_pos[k + 1] if k + 1 < len(row_pos) else len(factor_wide.index)
-        dt = factor_wide.index[start]
         row = factor_wide.iloc[start].dropna()
         if row.empty:
             prev_picks = set()
             continue
-        picks = row.nlargest(top_n).index if direction == "top" else row.nsmallest(top_n).index
-        sig.iloc[start:end, sig.columns.get_indexer(picks)] = 1.0
+        ranks = row.rank(ascending=ascending)
+        if prev_picks is None:
+            picks = set(ranks.nsmallest(top_n).index)
+        else:
+            keep = {s for s in prev_picks & set(ranks.index) if ranks[s] <= band}
+            need = top_n - len(keep)
+            fresh = ranks.drop(index=[s for s in keep if s in ranks.index]).nsmallest(need).index
+            picks = keep | set(fresh)
+            picks = {s for s in picks if ranks.get(s, np.inf) <= band}
+        sig.iloc[start:end, sig.columns.get_indexer(sorted(picks))] = 1.0
         if prev_picks is not None:
-            overlap = len(prev_picks & set(picks))
+            overlap = len(prev_picks & picks)
             turnovers.append(1.0 - overlap / top_n)
-        prev_picks = set(picks)
+        prev_picks = picks
     avg_turnover = float(np.mean(turnovers)) if turnovers else 0.0
     return sig, avg_turnover
 
@@ -192,6 +208,7 @@ def evaluate_portfolios(
     top_n: int = 5,
     rebalance_days: int = 20,
     direction: str | dict[str, str] = "auto",
+    buffer_n: int | None = None,
     commission: float = 0.001425,
     tax: float = 0.003,
     slippage_rate: float = 0.0,
@@ -222,7 +239,9 @@ def evaluate_portfolios(
         else:
             used = direction
             direction_used[name] = used
-        sig, avg_turnover = build_signals(fw, top_n=top_n, rebalance_days=rebalance_days, direction=used)
+        sig, avg_turnover = build_signals(
+            fw, top_n=top_n, rebalance_days=rebalance_days, direction=used, buffer_n=buffer_n
+        )
         daily, trades = portfolio_daily_returns(
             sig, close_wide, top_n=top_n, fee_rate=fee_rate, slippage_rate=slippage_rate
         )
@@ -468,6 +487,7 @@ def run_backtest_report(
     top_n: int = 5,
     rebalance_days: int = 20,
     direction: str = "auto",
+    buffer_n: int | None = None,
     commission: float = 0.001425,
     tax: float = 0.003,
     slippage_rate: float = 0.0,
@@ -493,6 +513,7 @@ def run_backtest_report(
         top_n=top_n,
         rebalance_days=rebalance_days,
         direction=direction,
+        buffer_n=buffer_n,
         commission=commission,
         tax=tax,
         slippage_rate=slippage_rate,
@@ -503,6 +524,7 @@ def run_backtest_report(
         "top_n": str(top_n),
         "再平衡間隔": f"{rebalance_days} 個交易日",
         "方向": direction,
+        "緩衝帶": f"{buffer_n} 名（跌出才換）" if buffer_n else "無",
         "資料來源": data_desc,
         "手續費（單邊）": f"{commission:.4%}",
         "證交稅（賣出）": f"{tax:.4%}",
@@ -529,6 +551,7 @@ def run_oos_report(
     factor_names: tuple[str, ...] | None = None,
     top_n: int = 5,
     rebalance_days: int = 20,
+    buffer_n: int | None = None,
     commission: float = 0.001425,
     tax: float = 0.003,
     slippage_rate: float = 0.0,
@@ -573,6 +596,7 @@ def run_oos_report(
             top_n=top_n,
             rebalance_days=rebalance_days,
             direction=directions,
+            buffer_n=buffer_n,
             commission=commission,
             tax=tax,
             slippage_rate=slippage_rate,
@@ -591,6 +615,7 @@ def run_oos_report(
             top_n=top_n,
             rebalance_days=rebalance_days,
             direction=directions,
+            buffer_n=buffer_n,
             commission=0.0,
             tax=0.0,
             slippage_rate=0.0,
@@ -619,6 +644,7 @@ def run_oos_report(
         f" / OOS {oos_dates.min().date()} ~ {oos_dates.max().date()}（{len(oos_dates)} 日）",
         "- 方向只由 IS 期間 IC 決定，OOS 期間固定方向執行；因子皆為 trailing 計算，無前視",
         f"- 成本：來回 {2 * commission + tax:.3%}（手續費 {commission:.4%}×2 + 證交稅 {tax:.1%}）"
+        + (f"；緩衝帶 {buffer_n} 名" if buffer_n else "")
         + ("；**評估以 OOS 淨績效為準**" if (commission or tax) else "；⚠️ 免成本模式"),
         "",
         "| 投組 | 方向 | OOS 淨年化 | OOS 夏普 | OOS 回撤 | OOS 免成本年化 | IS 淨年化 | OOS 基準年化 | OOS 超額(淨) | OOS IC(t) |",

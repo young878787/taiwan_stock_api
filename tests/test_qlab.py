@@ -187,6 +187,41 @@ def test_evaluate_portfolios_smoke():
     assert 0.0 <= results[0].avg_turnover <= 1.0
 
 
+def test_build_signals_buffer_keeps_holding():
+    """緩衝帶：持倉跌出 top_n 但仍在 buffer_n 內 → 續抱；跌出 buffer_n → 換股。"""
+    from qlab.factor_backtest import build_signals
+
+    idx = pd.date_range("2024-01-01", periods=4, freq="D")
+    # A 最強 → C 最弱（bottom=買最小者 → C 排名 1）
+    factor = pd.DataFrame(
+        {"A": [9.0, 9, 9, 9], "B": [5.0, 5, 5, 5], "C": [1.0, 1, 1, 1], "D": [2.0, 2, 2, 2], "E": [3.0, 3, 3, 3]},
+        index=idx,
+    )
+    # 無緩衝（top_n=1）：每次都抱 C，換倉 0
+    sig0, t0 = build_signals(factor, top_n=1, rebalance_days=1, direction="bottom")
+    assert (sig0["C"] == 1.0).all() and t0 == pytest.approx(0.0)
+
+    # 有緩衝（top_n=1, buffer=3）：第 2 天 C 變成第 4 名（跌出緩衝帶）→ 換成 B
+    f2 = factor.copy()
+    f2.iloc[1:, :] = 0.0
+    f2.iloc[1:, 0] = [9.0, 9.0, 9.0]  # A
+    f2.iloc[1:, 1] = [3.0, 3.0, 3.0]  # B 第 2 名
+    f2.iloc[1:, 2] = [8.0, 8.0, 8.0]  # C 掉到第 5 名（跌出緩衝帶 3）
+    f2.iloc[1:, 3] = [1.0, 1.0, 1.0]  # D 第 1 名
+    f2.iloc[1:, 4] = [2.0, 2.0, 2.0]  # E
+    sig1, t1 = build_signals(f2, top_n=1, rebalance_days=1, direction="bottom", buffer_n=3)
+    assert sig1["C"].iloc[0] == 1.0  # 第一個再平衡抱 C
+    assert sig1["D"].iloc[1] == 1.0  # C 跌出緩衝帶 → 換成排名 1 的 D
+    assert t1 == pytest.approx(1.0 / 3.0)  # 3 次有前倉的再平衡只換 1 次
+
+    # 緩衝帶內（C 只掉到第 3 名）→ 續抱，換倉 0
+    f3 = factor.copy()
+    f3.iloc[1:, 2] = [4.0, 4.0, 4.0]  # C 值變 4 → 排名第 3（D=1、E=2、C=3），仍在緩衝帶 3
+    sig2, t2 = build_signals(f3, top_n=1, rebalance_days=1, direction="bottom", buffer_n=3)
+    assert (sig2["C"] == 1.0).all()
+    assert t2 == pytest.approx(0.0)
+
+
 def test_auto_direction_uses_ic_sign():
     from qlab.factor_backtest import auto_direction
 

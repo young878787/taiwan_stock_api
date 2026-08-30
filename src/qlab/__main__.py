@@ -64,6 +64,13 @@ def main(argv: list[str] | None = None) -> int:
     p_bt.add_argument(
         "--gross", action="store_true", help="免成本模式（commission/tax/slippage 全 0），僅供訊號驗證"
     )
+    p_bt.add_argument(
+        "--buffer",
+        type=int,
+        default=None,
+        metavar="N",
+        help="緩衝帶：持倉跌出前 N 名才換股（N > top-n），降低換倉與成本（例：--buffer 10）",
+    )
 
     p_vd = sub.add_parser(
         "verify-data", help="驗證 daily_pv.h5 與 kstock 台股 parquet 資料庫一致（來源/排列/數值）"
@@ -130,6 +137,7 @@ def main(argv: list[str] | None = None) -> int:
             factor_names=factor_names,
             top_n=ns.top_n,
             rebalance_days=ns.rebalance_days,
+            buffer_n=ns.buffer,
             commission=0.0 if ns.gross else ns.commission,
             tax=0.0 if ns.gross else ns.tax,
             slippage_rate=0.0 if ns.gross else ns.slippage,
