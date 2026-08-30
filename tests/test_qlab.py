@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import polars as pl
 import pytest
 
@@ -89,3 +90,118 @@ def test_export_raises_when_no_data(tmp_path):
     s = qlab_settings(Settings(project_root=tmp_path, data_dir=tmp_path / "empty"))
     with pytest.raises(FileNotFoundError):
         QlibDataExporter(s).export()
+
+
+# ---------------------------------------------------------------------------
+# factor_backtest：因子 → 投組回測
+# ---------------------------------------------------------------------------
+
+
+def _flat_close(n_days=10, n_sym=4, start=100.0):
+    idx = pd.date_range("2024-01-01", periods=n_days, freq="D")
+    cols = [f"S{i}" for i in range(n_sym)]
+    return pd.DataFrame(start, index=idx, columns=cols, dtype=float)
+
+
+def test_build_signals_rebalance_and_bottom_picks():
+    from qlab.factor_backtest import build_signals
+
+    idx = pd.date_range("2024-01-01", periods=6, freq="D")
+    factor = pd.DataFrame(
+        {"A": [1.0, 1, 1, 1, 1, 1], "B": [0.0, 0, 0, 0, 0, 0], "C": [-1.0, -1, -1, -1, -1, -1]},
+        index=idx,
+    )
+    sig, turnover = build_signals(factor, top_n=1, rebalance_days=3, direction="bottom")
+
+    # 每個再平衡窗（3 列）只選因子最小者：C → C
+    assert (sig["C"] == 1.0).all()
+    assert (sig["A"] == 0.0).all() and (sig["B"] == 0.0).all()
+    # 兩次再平衡，第二次完全重疊 → 平均換倉比例 0
+    assert turnover == pytest.approx(0.0)
+
+    sig_top, _ = build_signals(factor, top_n=1, rebalance_days=3, direction="top")
+    assert (sig_top["A"] == 1.0).all()
+    assert (sig_top["C"] == 0.0).all()
+
+
+def test_portfolio_backtest_no_lookahead():
+    """改 t 日因子值，投組在 t+1 日（含）之前報酬不得改變（引擎延後一天生效）。"""
+    from qlab.factor_backtest import portfolio_daily_returns
+
+    close = _flat_close(n_days=10)
+    close["S0"] = 100.0 * (1.10 ** np.arange(10))  # S0 每日 +10%
+    close["S1"] = 100.0 * (0.90 ** np.arange(10))  # S1 每日 -10%
+    factor = pd.DataFrame(0.0, index=close.index, columns=close.columns)
+    factor.iloc[5] = [0.0, 0.0, 0.0, 0.0]
+    base = factor.copy()
+    base.iloc[5, 0] = 1.0  # 第 5 日（再平衡日）持有 S0
+    variant = factor.copy()
+    variant.iloc[5, 1] = 1.0  # 改持有 S1
+
+    daily_base, _ = portfolio_daily_returns(base, close, top_n=1, fee_rate=0.0)
+    daily_var, _ = portfolio_daily_returns(variant, close, top_n=1, fee_rate=0.0)
+
+    # 訊號在第 5 列產生，引擎 shift 一天 → 第 6 列才反映差異
+    assert np.allclose(daily_base.iloc[:6].values, daily_var.iloc[:6].values)
+    assert not np.isclose(daily_base.iloc[6], daily_var.iloc[6])
+    assert daily_base.iloc[6] == pytest.approx(0.10)  # base 持有 S0
+    assert daily_var.iloc[6] == pytest.approx(-0.10)  # variant 持有 S1
+
+
+def test_portfolio_backtest_fees_reduce_return():
+    from qlab.factor_backtest import portfolio_daily_returns
+
+    close = _flat_close(n_days=12)
+    close["S0"] = 100.0 * (1.05 ** np.arange(12))
+    factor = pd.DataFrame(0.0, index=close.index, columns=close.columns)
+    factor["S0"] = 1.0  # 永遠持有 S0（進場一次）
+
+    free, _ = portfolio_daily_returns(factor, close, top_n=1, fee_rate=0.0)
+    costed, _ = portfolio_daily_returns(factor, close, top_n=1, fee_rate=0.002925)
+    assert costed.sum() < free.sum()
+    # 進場一次、之後無換倉 → 只在進場日扣一次費
+    assert free.sum() - costed.sum() == pytest.approx(0.002925, rel=1e-6)
+
+
+def test_evaluate_portfolios_smoke():
+    from qlab.factor_backtest import evaluate_portfolios
+
+    rng = np.random.default_rng(42)
+    idx = pd.date_range("2024-01-01", periods=60, freq="D")
+    cols = [f"S{i}" for i in range(8)]
+    close = pd.DataFrame(
+        100.0 * np.cumprod(1.0 + rng.normal(0.0005, 0.02, (60, 8)), axis=0), index=idx, columns=cols
+    )
+    factor = pd.DataFrame(rng.normal(size=(60, 8)), index=idx, columns=cols)
+
+    results, combined, bench, dirs = evaluate_portfolios(
+        {"f1": factor}, close, top_n=3, rebalance_days=5, direction="bottom"
+    )
+    assert len(results) == 1 and results[0].factor_name == "f1"
+    assert dirs["f1"] == "bottom"
+    assert combined.factor_name.startswith("組合")
+    assert np.isfinite(combined.total_return)
+    # 全部標的長期上漲 → 等權基準總報酬為正
+    assert bench["total_return"] > 0
+    # 換倉比例介於 0~1
+    assert 0.0 <= results[0].avg_turnover <= 1.0
+
+
+def test_auto_direction_uses_ic_sign():
+    from qlab.factor_backtest import auto_direction
+
+    idx = pd.date_range("2024-01-01", periods=30, freq="D")
+    cols = ["A", "B", "C", "D", "E", "F"]
+    close = pd.DataFrame(100.0, index=idx, columns=cols)
+    # 讓 A..C 連續上漲、D..F 連續下跌 → 動能為正（因子大者未來漲）
+    close.loc[:, ["A", "B", "C"]] = 100.0 * (1.01 ** np.arange(30))[:, None]
+    close.loc[:, ["D", "E", "F"]] = 100.0 * (0.99 ** np.arange(30))[:, None]
+    price_df = close.stack().rename("$close").rename_axis(["datetime", "instrument"]).to_frame()
+    # 因子相對排序固定：A..C 恆為高值、D..F 恆為低值（與價格路徑方向一致）
+    factor = pd.DataFrame(
+        {c: (1.0 if c in ("A", "B", "C") else 0.0) for c in cols},
+        index=idx,
+    )
+    direction, ic = auto_direction(factor, price_df, fwd_days=5)
+    assert direction == "top"
+    assert ic > 0
