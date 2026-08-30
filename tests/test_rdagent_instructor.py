@@ -295,7 +295,7 @@ def test_export_h5_writes_tw_daily_pv(store, test_settings, monkeypatch, tmp_pat
     assert list(df.columns) == ["$open", "$close", "$high", "$low", "$volume", "$factor"]
     assert df.index.names == ["datetime", "instrument"]
     assert df.index.get_level_values("instrument").unique().tolist() == ["TSE0050", "TSE2330"]  # market+symbol
-    assert (df["$factor"] == 1.0).all()
+    assert (df["$factor"] > 0).all()  # 復權因子為正（可能是 yfinance 實際值或 fallback 1.0）
     assert df["$volume"].iloc[0] == 1_000_000  # 股
     assert str(df.index.get_level_values("datetime").min().date()) == "2024-01-02"
 
