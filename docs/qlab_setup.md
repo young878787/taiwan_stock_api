@@ -184,6 +184,17 @@ uv run python -m qlab rdagent fin_factor      # 現在跑的是台股因子演�
 > 且 RD-Agent 首次資料下載後每個工作區是全新 run，先前用 A 股跑出的因子
 > （工作區 `RD-Agent_workspace`）不會混入台股 run。
 
+### 7.5 回測宇宙與大盤基準
+
+- **回測宇宙**：`export-tw100` 從正式版 daily_pv.h5 切前 N 檔（不重抓、零誤差），
+  預設依**代碼序**（`--order code`，與 `backtest --top-symbols` 同口徑）；
+  `--order turnover` 改依成交金額排名（`data/universe/top_liquidity_300.csv`），
+  僅供對照實驗——2026-08-31 實測 `volume_change_5d` 訊號在流動性前 100 失效（見 strategy README）。
+- **基準**：backtest / OOS 報告的基準為**臺灣大盤 TAIEX 報酬指數（含息）**
+  （`qlab/benchmark.py` 經 FinMind `TaiwanStockTotalReturnIndex` 抓取，
+  快取 `data/qlab/benchmark_taiex.parquet`，已涵蓋請求區間時離線重跑不再打 API；
+  抓不到才 fallback 宇宙等權）。與策略復權含息口徑對齊，超額門檻以大盤為準。
+
 >
 > 相關處理已內建於 `qlab/rdagent_runner.py`：空值金鑰覆寫、`openai/` 前綴、
 > `ENABLE_RESPONSE_SCHEMA=false`（OpenRouter 免費模型不支援 response_format，走 DeepSeek 式 JSON 降級路徑）、

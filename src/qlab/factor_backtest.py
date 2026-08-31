@@ -631,6 +631,23 @@ def benchmark_daily_returns(close_wide: pd.DataFrame) -> pd.Series:
     return close_wide.pct_change(fill_method=None).mean(axis=1)
 
 
+def _resolve_benchmark(close_wide: pd.DataFrame) -> tuple[pd.Series, str, str]:
+    """基準序列與標籤：**以臺灣大盤（TAIEX）為主**，抓不到才 fallback 全標的等權。
+
+    回傳 (日報酬, 完整標籤, 表格欄位短名)。大盤採含息報酬指數（FinMind TRI，
+    與策略復權含息口徑對齊）；對齊回測交易日後覆蓋率不足 50% 視為不可用。
+    """
+    from qlab.benchmark import load_taiex_daily_returns
+
+    mkt = load_taiex_daily_returns(close_wide.index.min(), close_wide.index.max())
+    if mkt is not None:
+        daily, label = mkt
+        aligned = daily.reindex(close_wide.index).dropna()
+        if len(aligned) >= 30 and len(aligned) >= len(close_wide.index) * 0.5:
+            return aligned, label, "大盤"
+    return benchmark_daily_returns(close_wide), "全標的等權、每日再平衡，免成本", "基準"
+
+
 def evaluate_portfolios(
     factor_wides: dict[str, pd.DataFrame],
     close_wide: pd.DataFrame,
@@ -808,6 +825,7 @@ def _yearly_stats(daily: pd.Series) -> dict[int, tuple[float, float, float]]:
 def _yearly_section(
     portfolios: list[tuple[str, pd.Series]],
     bench_daily: pd.Series | None,
+    bench_name: str = "基準",
 ) -> list[str]:
     """逐年表現區塊：檢視是否單一年度（暴漲/暴跌）貢獻了全部報酬。"""
     bench_stats = _yearly_stats(bench_daily) if bench_daily is not None and len(bench_daily) else {}
@@ -819,7 +837,7 @@ def _yearly_section(
         "",
         "用途：檢查報酬是否集中在單一年度（暴漲/暴跌年），而非逐年穩定",
         "",
-        "| 年度 | " + " | ".join(name for name, _ in portfolios) + " | 基準 | 最佳因子超額 |",
+        f"| 年度 | " + " | ".join(name for name, _ in portfolios) + f" | {bench_name} | 最佳因子超額 |",
         "|---|" + "---|" * (len(portfolios) + 2),
     ]
     for y in years:
@@ -835,7 +853,7 @@ def _yearly_section(
         "",
         "各年度最大回撤：",
         "",
-        "| 年度 | " + " | ".join(name for name, _ in portfolios) + " | 基準 |",
+        f"| 年度 | " + " | ".join(name for name, _ in portfolios) + f" | {bench_name} |",
         "|---|" + "---|" * (len(portfolios) + 1),
     ]
     for y in years:
@@ -948,6 +966,8 @@ def build_report(
     direction_used: dict[str, str],
     params: dict[str, str],
     bench_daily: pd.Series | None = None,
+    bench_name: str = "基準",
+    bench_label: str = "全標的等權、每日再平衡，免成本",
     gross_results: list[PortfolioResult] | None = None,
     gross_combined: PortfolioResult | None = None,
     ic_stability_map: dict[str, tuple[float, float, float]] | None = None,
@@ -995,13 +1015,14 @@ def build_report(
             f"| {r.avg_turnover:.0%} | {r.trade_count} | {r.win_rate:.0%} |"
         )
     lines.append(
-        f"| 基準（全標的等權、每日再平衡，免成本） | - | {bench['total_return']:+.1%} | {bench['annual_return']:+.1%} "
+        f"| 基準：{bench_label} | - | {bench['total_return']:+.1%} | {bench['annual_return']:+.1%} "
         f"| {bench['sharpe']:.2f} | {bench['max_drawdown']:.1%} | {bench['volatility']:.1%} | - | - | - |"
     )
     lines += _robustness_section(results, combined, gross_results, gross_combined, ic_stability_map)
     lines += _yearly_section(
         [(r.factor_name, r.daily) for r in results] + [(combined.factor_name, combined.daily)],
         bench_daily,
+        bench_name=bench_name,
     )
     lines += _interpretation(combined, bench, bench_daily, gross_results, gross_combined, ic_stability_map)
     return "\n".join(lines) + "\n"
@@ -1080,6 +1101,7 @@ def run_backtest_report(
     ``trades``：額外輸出實際進出倉明細 CSV（``trades_<因子>.csv``，與報告同目錄），
     並在報告尾端附摘要；方向沿用回測解析結果（auto 亦同），確保明細與淨值曲線一致。
     """
+    output = output or (kstock_settings.data_dir / "qlab" / BACKTEST_REPORT_FILENAME)
     factor_wides, price_df, close_wide, raw_close_wide, data_desc = _prepare_universe(
         factor_names, data, top_symbols, workdir, workspace=workspace
     )
@@ -1111,6 +1133,8 @@ def run_backtest_report(
         fwd_days=fwd_days,
     )
     stab = ic_stability(factor_wides, price_df, fwd_days=fwd_days)
+    bench_daily, bench_label, bench_name = _resolve_benchmark(close_wide)
+    bench = _metrics(bench_daily)  # 基準以臺灣大盤為主（fallback 等權）
     params = {
         "因子": "、".join(r.factor_name for r in results),
         "top_n": str(top_n),
@@ -1118,6 +1142,7 @@ def run_backtest_report(
         "方向": direction,
         "緩衝帶": f"{buffer_n} 名（跌出才換）" if buffer_n else "無",
         "資料來源": data_desc,
+        "基準": bench_label,
         "價格口徑": "復權收盤（$close × $factor，含股息）；交易明細成交價為原始價",
         "手續費（單邊）": f"{commission:.4%}",
         "證交稅（賣出）": f"{tax:.4%}",
@@ -1132,7 +1157,9 @@ def run_backtest_report(
         bench,
         direction_used,
         params,
-        bench_daily=benchmark_daily_returns(close_wide),
+        bench_daily=bench_daily,
+        bench_name=bench_name,
+        bench_label=bench_label,
         gross_results=gross_results,
         gross_combined=gross_combined,
         ic_stability_map=stab,
@@ -1184,6 +1211,7 @@ def run_oos_report(
     factor_wides, price_df, close_wide, raw_close_wide, data_desc = _prepare_universe(
         factor_names, data, top_symbols, workdir
     )
+    bench_daily, bench_label, bench_name = _resolve_benchmark(close_wide)
     dates = close_wide.index
     split = int(len(dates) * is_ratio)
     is_dates, oos_dates = dates[:split], dates[split:]
@@ -1219,7 +1247,8 @@ def run_oos_report(
     is_fws = {n: fw.loc[is_dates] for n, fw in factor_wides.items()}
     oos_fws = {n: fw.loc[oos_dates] for n, fw in factor_wides.items()}
     is_res, is_comb, is_bench = _run(is_fws, close_wide.loc[is_dates])
-    oos_res, oos_comb, oos_bench = _run(oos_fws, close_wide.loc[oos_dates])
+    oos_res, oos_comb, _oos_ew_bench = _run(oos_fws, close_wide.loc[oos_dates])
+    oos_bench = _metrics(bench_daily.loc[oos_dates])  # 基準以臺灣大盤為主（fallback 等權）
     # 免成本 OOS（訊號有效性對照）
     if commission or tax or slippage_rate:
         gross_res, gross_comb, _, _ = evaluate_portfolios(
@@ -1260,6 +1289,7 @@ def run_oos_report(
         "；報酬以**復權價**計（$close × $factor，含股息）"
         + (f"；緩衝帶 {buffer_n} 名" if buffer_n else "")
         + ("；**評估以 OOS 淨績效為準**" if (commission or tax) else "；⚠️ 免成本模式"),
+        f"- 基準：{bench_label}",
         "",
         "| 投組 | 方向 | OOS 淨年化 | OOS 夏普 | OOS 回撤 | OOS 免成本年化 | IS 淨年化 | OOS 基準年化 | OOS 超額(淨) | OOS IC(t) |",
         "|---|---|---|---|---|---|---|---|---|---|",
@@ -1282,7 +1312,7 @@ def run_oos_report(
         f"| {gc.annual_return - oos_bench['annual_return']:+.1%} | - |"
     )
     lines.append(
-        f"| 基準（等權、每日再平衡，免成本） | - | - | {oos_bench['sharpe']:.2f} | {oos_bench['max_drawdown']:.1%} | - | - | - | - | - |"
+        f"| 基準：{bench_label} | - | - | {oos_bench['sharpe']:.2f} | {oos_bench['max_drawdown']:.1%} | - | - | - | - | - |"
     )
     lines += [
         "",

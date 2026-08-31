@@ -60,7 +60,7 @@ uv run python -m qlab rdagent quant   # RD-Agent（需 Docker + LLM 金鑰）
 
 # fin_factor 因子演化（台股 daily_pv.h5；金鑰由 .env 自動注入）
 uv run python -m qlab export-h5                    # 台股日K → daily_pv.h5（正式版 + debug 20 檔）
-uv run python -m qlab export-tw100                 # 切出代碼前 100 檔 → factor_source_data_tw100/
+uv run python -m qlab export-tw100                 # 切出代碼前 100 檔 → factor_source_data_tw100/（--order turnover 切成交金額序，對照用）
 uv run python -m qlab rdagent fin_factor --universe tw100   # 演化宇宙=前 100 檔（與回測口徑一致）
 uv run python -m qlab rdagent fin_factor --universe tw100 --guidance short
                                                    # 假設性引導：做空導向（高值→未來跌；

@@ -106,6 +106,12 @@ def main(argv: list[str] | None = None) -> int:
         help="從既有正式版 daily_pv.h5 切出前 N 檔（依 instrument 排序）→ factor_source_data_twN/（不重抓、零誤差）",
     )
     p_tw100.add_argument("--top", type=int, default=100, help="宇宙檔數（預設 100）")
+    p_tw100.add_argument(
+        "--order",
+        default="code",
+        choices=["code", "turnover"],
+        help="排序口徑：code=代碼序（預設、正式口徑）；turnover=成交金額排名（對照實驗用）",
+    )
     p_tw100.add_argument("--src", default=None, help="來源 h5（預設 factor_source_data_tw/daily_pv.h5）")
 
     p_bt = sub.add_parser(
@@ -161,7 +167,7 @@ def main(argv: list[str] | None = None) -> int:
     if ns.command == "export-tw100":
         from qlab.export_h5 import slice_top_symbols
 
-        rep = slice_top_symbols(n=ns.top, src=Path(ns.src) if ns.src else None)
+        rep = slice_top_symbols(n=ns.top, src=Path(ns.src) if ns.src else None, order=ns.order)
         print(f"已切出：{rep.path}（{rep.n_rows:,} 列 / {rep.n_symbols} 標的 / {rep.start}~{rep.end}）")
         return 0
 

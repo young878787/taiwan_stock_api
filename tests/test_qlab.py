@@ -793,7 +793,7 @@ def test_build_signals_rejects_short():
 
 
 def test_slice_top_symbols(tmp_path):
-    """slice_top_symbols：依 instrument 排序切前 N 檔（OTC < TSE），與回測口徑一致。"""
+    """slice_top_symbols（order=code）：依 instrument 排序切前 N 檔（OTC < TSE）。"""
     from qlab.export_h5 import slice_top_symbols
 
     src = tmp_path / "daily_pv.h5"
@@ -806,12 +806,64 @@ def test_slice_top_symbols(tmp_path):
     )
     df.to_hdf(src, key="data")
 
-    rep = slice_top_symbols(src=src, n=2, output_dir=tmp_path / "out")
+    rep = slice_top_symbols(src=src, n=2, output_dir=tmp_path / "out", order="code")
     assert rep.n_symbols == 2 and rep.path.exists() and (rep.path.parent / "README.md").exists()
     out = pd.read_hdf(rep.path, key="data")
     got = sorted(out.index.get_level_values("instrument").unique())
     assert got == ["OTC1234", "OTC5678"]  # 排序前 2 檔（OTC1234 < OTC5678 < TSE…）
     assert len(out) == 4  # 2 檔 × 2 日
+
+
+def test_slice_top_symbols_turnover_order(tmp_path):
+    """slice_top_symbols（order=turnover）：依宇宙 CSV 成交金額排名切前 N 檔。"""
+    from qlab.export_h5 import slice_top_symbols
+
+    src = tmp_path / "daily_pv.h5"
+    idx = pd.MultiIndex.from_product(
+        [pd.to_datetime(["2024-01-02"]), ["TSE2330", "TSE1101", "TSE2454"]],
+        names=["datetime", "instrument"],
+    )
+    df = pd.DataFrame(
+        {"$open": 1.0, "$close": 1.0, "$high": 1.0, "$low": 1.0, "$volume": 1000.0, "$factor": 1.0}, index=idx
+    )
+    df.to_hdf(src, key="data")
+    csv = tmp_path / "top_liquidity_300.csv"
+    csv.write_text(
+        "rank,symbol,name,avg_turnover_twd,sampled_days\n"
+        "0,2454,聯發科,21970678265.0,5\n"
+        "1,2330,台積電,38947729876.0,5\n"
+        "2,1101,台泥,1000000000.0,5\n",
+        encoding="utf-8",
+    )
+
+    rep = slice_top_symbols(
+        src=src, n=2, output_dir=tmp_path / "out", order="turnover", universe_csv=csv
+    )
+    out = pd.read_hdf(rep.path, key="data")
+    got = sorted(out.index.get_level_values("instrument").unique())
+    assert got == ["TSE2330", "TSE2454"]  # 成交金額排名前 2（2454 → 2330），不含代碼較小的 1101
+
+
+def test_slice_top_symbols_turnover_csv_missing(tmp_path):
+    """order=turnover 但宇宙 CSV 不存在 → fallback 代碼序，不報錯。"""
+    from qlab.export_h5 import slice_top_symbols
+
+    src = tmp_path / "daily_pv.h5"
+    idx = pd.MultiIndex.from_product(
+        [pd.to_datetime(["2024-01-02"]), ["TSE2330", "TSE1101"]],
+        names=["datetime", "instrument"],
+    )
+    df = pd.DataFrame(
+        {"$open": 1.0, "$close": 1.0, "$high": 1.0, "$low": 1.0, "$volume": 1000.0, "$factor": 1.0}, index=idx
+    )
+    df.to_hdf(src, key="data")
+
+    rep = slice_top_symbols(
+        src=src, n=1, output_dir=tmp_path / "out",
+        order="turnover", universe_csv=tmp_path / "nope.csv",
+    )
+    out = pd.read_hdf(rep.path, key="data")
+    assert sorted(out.index.get_level_values("instrument").unique()) == ["TSE1101"]
 
 
 def test_slice_top_symbols_missing_src(tmp_path):
@@ -835,7 +887,7 @@ def test_build_rdagent_env_guidance_and_universe(test_settings, tmp_path):
     with pytest.raises(FileNotFoundError):
         build_rdagent_env(test_settings, universe="tw100", guidance="short")
 
-    # tw100 資料集存在 → DEBUG 目錄指到 tw100（fin_factor 因子執行固定用 DEBUG 目錄）
+    # tw100 資料集存在 → DEBUG 目錄指到執行副本（_exec，防 LLM 因子碼寫穿 symlink 毀源檔）
     qlab_data = tmp_path / "data" / "qlab"
     (qlab_data / "factor_source_data_tw").mkdir(parents=True)  # 需與 debug 目錄並存
     (qlab_data / "factor_source_data_tw" / "daily_pv.h5").write_bytes(b"x")
@@ -843,7 +895,9 @@ def test_build_rdagent_env_guidance_and_universe(test_settings, tmp_path):
     tw100.mkdir(parents=True)
     (tw100 / "daily_pv.h5").write_bytes(b"x")
     env_tw = build_rdagent_env(test_settings, universe="tw100", guidance="none")
-    assert env_tw["FACTOR_COSTEER_DATA_FOLDER_DEBUG"].endswith("factor_source_data_tw100")
+    assert env_tw["FACTOR_COSTEER_DATA_FOLDER_DEBUG"].endswith("factor_source_data_tw100_exec")
+    # 執行副本必須實體存在（RD-Agent 的 get_data_folder_intro 依此判斷跳過內建資料生成）
+    assert (tw100.parent / "factor_source_data_tw100_exec" / "daily_pv.h5").exists()
 
 
 def test_short_factor_proposal_guidance_injection():
