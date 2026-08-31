@@ -233,6 +233,44 @@ def to_daily_pv(
     return out
 
 
+def slice_top_symbols(
+    src: Path | None = None,
+    n: int = 100,
+    output_dir: Path | None = None,
+) -> ExportReport:
+    """從既有正式版 daily_pv.h5 切出「前 N 檔（依 instrument 排序）」子集。
+
+    排序口徑與 :func:`qlab.factor_backtest` 的 ``--top-symbols`` 完全一致
+    （``sorted(instruments)[:n]``），確保 RD-Agent 演化宇宙與回測宇宙相同。
+    直接切片不重抓、不做任何計算 → 與正式版逐列零誤差（含 $factor）。
+
+    instrument 為 ``{market}{symbol}``（OTC < TSE 排序在前），與既有策略
+    ``strategy/volume_change_5d`` 的「代碼前 100 檔」口徑相同。
+    """
+    src = src or kstock_settings.data_dir / "qlab" / "factor_source_data_tw" / "daily_pv.h5"
+    if not src.exists():
+        raise FileNotFoundError(f"來源 h5 不存在：{src}（先跑 `uv run python -m qlab export-h5`）")
+    df = pd.read_hdf(src, key="data")
+    syms = sorted(df.index.get_level_values("instrument").unique())[:n]
+    out = df[df.index.get_level_values("instrument").isin(syms)].sort_index()
+    target = output_dir or kstock_settings.data_dir / "qlab" / f"factor_source_data_tw{n}"
+    target.mkdir(parents=True, exist_ok=True)
+    out.to_hdf(target / "daily_pv.h5", key="data")
+    # _README_TW 含 {market} 等字面大括號，不能用 .format() → 以字串串接附註
+    (target / "README.md").write_text(
+        _README_TW + f"\n- 宇宙：依 instrument 排序的前 {len(syms)} 檔（與 `qlab backtest --top-symbols {n}` 相同口徑）。\n",
+        encoding="utf-8",
+    )
+    dts = out.index.get_level_values("datetime")
+    return ExportReport(
+        path=target / "daily_pv.h5",
+        n_rows=len(out),
+        n_symbols=out.index.get_level_values("instrument").nunique(),
+        start=str(dts.min().date()),
+        end=str(dts.max().date()),
+    )
+
+
 def export_daily_pv(
     output_dir: Path | None = None,
     debug_dir: Path | None = None,

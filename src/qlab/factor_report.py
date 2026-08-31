@@ -31,7 +31,10 @@ WORKSPACE_DIRNAME = "RD-Agent_workspace"
 REPORT_FILENAME = "factor_report.md"
 
 # 因子值所依據的 daily_pv.h5 候選路徑（$close 用來算前瞻報酬；台股優先、A 股最後）
+# tw100 優先於 debug：新跑的因子宇宙是前 100 檔（fin_factor 執行固定用 DEBUG 目錄）；
+# 舊因子（20 檔）取交集後樣本不變，故順序對既有結果無影響。
 _DATA_DIRS = (
+    kstock_settings.data_dir / "qlab" / "factor_source_data_tw100" / "daily_pv.h5",
     kstock_settings.data_dir / "qlab" / "factor_source_data_tw_debug" / "daily_pv.h5",
     kstock_settings.data_dir / "qlab" / "factor_source_data_tw" / "daily_pv.h5",
     kstock_settings.data_dir / "qlab" / "rdagent_workspace" / "git_ignore_folder"
@@ -66,8 +69,36 @@ def _load_price_data() -> pd.DataFrame | None:
     return None
 
 
+def _normalize_factor_frame(df: pd.DataFrame) -> pd.DataFrame | None:
+    """把 LLM 產出的因子結果統一成 ``(datetime, instrument)`` MultiIndex；無法辨識回 None。
+
+    fin_factor 的 LLM 程式碼偶爾產出壞 index——層級名稱重複（如
+    ``(instrument, datetime, instrument)``）或順序顛倒。取各名稱**第一個**符合的層級
+    重組；重組後 ``(datetime, instrument)`` 若有重複（無法唯一對應）則視為壞結果。
+    """
+    if not isinstance(df.index, pd.MultiIndex):
+        return None
+    names = [str(n) for n in df.index.names]
+    if names == ["datetime", "instrument"]:
+        return df
+    if "datetime" not in names or "instrument" not in names:
+        return None
+    pair = pd.MultiIndex.from_arrays(
+        [
+            df.index.get_level_values(names.index("datetime")),
+            df.index.get_level_values(names.index("instrument")),
+        ],
+        names=["datetime", "instrument"],
+    )
+    if pair.has_duplicates:
+        return None
+    out = df.copy()
+    out.index = pair
+    return out
+
+
 def _load_factor_dir(factor_dir: Path) -> FactorResult | None:
-    """讀取單一因子目錄；沒有 result.h5（未執行成功）則回傳 None。"""
+    """讀取單一因子目錄；沒有 result.h5（未執行成功）或 index 壞掉無法辨識則回傳 None。"""
     result_file = factor_dir / "result.h5"
     if not result_file.exists():
         return None
@@ -83,6 +114,9 @@ def _load_factor_dir(factor_dir: Path) -> FactorResult | None:
     if isinstance(df, pd.Series):
         # ling 生成的程式碼可能以 Series（帶 name）儲存，統一轉 DataFrame
         df = df.to_frame(name=df.name or "factor")
+    df = _normalize_factor_frame(df)
+    if df is None:
+        return None
     col = df.columns[0]
     values = df[col].dropna()
     # MultiIndex (datetime, instrument)
@@ -133,13 +167,19 @@ def daily_rank_ic(
 
 
 def forward_returns(price_df: pd.DataFrame, days: int = 5) -> pd.DataFrame:
-    """由 daily_pv（$close 欄、MultiIndex）計算 N 日前瞻報酬（wide 格式）。
+    """由 daily_pv（$close/$factor 欄、MultiIndex）計算 N 日前瞻報酬（wide 格式）。
 
+    報酬以**復權價**（$close × $factor，向後調整、含股息）計算——除息日原始價自然回落
+    不會再被誤判為虧損；無 $factor 欄（舊資料）時退回原始價。
     壞資料防禦：close <= 0（停牌誤植等）視為缺價，避免產生 inf/爆量前瞻報酬
     毒化 Rank IC（與回測端的 close_wide.mask 口徑一致）。
     """
-    close = price_df["$close"].unstack("instrument")
-    close = close.mask(close <= 0.0)
+    raw = price_df["$close"].unstack("instrument")
+    if "$factor" in price_df.columns:
+        close = raw * price_df["$factor"].unstack("instrument")
+    else:
+        close = raw
+    close = close.mask((raw <= 0.0) | ~np.isfinite(close) | (close <= 0.0))
     return close.shift(-days) / close - 1
 
 

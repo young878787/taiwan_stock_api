@@ -57,6 +57,18 @@ uv run pytest          # 執行測試（全部離線運行，不需網路/金鑰
 uv run python -m qlab export     # data/normalized/daily → data/qlab/qlib_data（Qlib bin 格式）
 uv run python -m qlab ic --start 2021-01-01 --end 2026-08-26   # Alpha158 + LightGBM IC 分析
 uv run python -m qlab rdagent quant   # RD-Agent（需 Docker + LLM 金鑰）
+
+# fin_factor 因子演化（台股 daily_pv.h5；金鑰由 .env 自動注入）
+uv run python -m qlab export-h5                    # 台股日K → daily_pv.h5（正式版 + debug 20 檔）
+uv run python -m qlab export-tw100                 # 切出代碼前 100 檔 → factor_source_data_tw100/
+uv run python -m qlab rdagent fin_factor --universe tw100   # 演化宇宙=前 100 檔（與回測口徑一致）
+uv run python -m qlab rdagent fin_factor --universe tw100 --guidance short
+                                                   # 假設性引導：做空導向（高值→未來跌；
+                                                   # 禁止 volume_change_5d 反向與既有因子翻版，
+                                                   # 見 qlab/short_factor_proposal.py）
+uv run python -m qlab factor-report --fwd-days 5   # 因子清單 + 截面 Rank IC → data/qlab/factor_report.md
+uv run python -m qlab backtest --top-symbols 100 --direction short
+                                                   # 做空回測（top 訊號、報酬取負、含成本淨值）
 ```
 
 ## 使用範例

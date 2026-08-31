@@ -26,7 +26,11 @@ def _force_set(env: dict[str, str], key: str, value: str) -> None:
         env[key] = value
 
 
-def build_rdagent_env(s: Settings | None = None) -> dict[str, str]:
+def build_rdagent_env(
+    s: Settings | None = None,
+    universe: str = "full",
+    guidance: str = "none",
+) -> dict[str, str]:
     """把共用 .env 的金鑰映射成 RD-Agent/LLM 期望的環境變數。
 
     支援三種後端（擇一即可，優先序：OpenRouter > DeepSeek > OpenAI）：
@@ -90,23 +94,50 @@ def build_rdagent_env(s: Settings | None = None) -> dict[str, str]:
         if (envs_bin / "rdagent" / "bin").exists() and not env.get("BIN_PATH"):
             parts = [str(envs_bin / name / "bin") for name in ("rdagent", "rdagent4qlib")]
             _force_set(env, "BIN_PATH", ":".join(parts))
-        # fin_factor 因子資料指到台股版（若已用 `qlab export-h5` 產生）：
-        # RD-Agent 預設從 qlib 下載中國 A 股，改指我們的台股 daily_pv.h5。
-        # 兩個資料目錄都存在時 RD-Agent 會跳過內建資料生成（見 get_data_folder_intro）。
-        tw_source = Path(settings.data_dir) / "qlab" / "factor_source_data_tw"
-        tw_debug = Path(settings.data_dir) / "qlab" / "factor_source_data_tw_debug"
-        if (tw_source / "daily_pv.h5").exists() and (tw_debug / "daily_pv.h5").exists():
-            _force_set(env, "FACTOR_COSTEER_DATA_FOLDER", str(tw_source))
-            _force_set(env, "FACTOR_COSTEER_DATA_FOLDER_DEBUG", str(tw_debug))
+    # fin_factor 因子資料指到台股版（若已用 `qlab export-h5` 產生），
+    # 取代 RD-Agent 預設的 qlib 中國 A 股。兩個資料目錄都存在時
+    # RD-Agent 會跳過內建資料生成（見 get_data_folder_intro）。
+    tw_source = Path(st.data_dir) / "qlab" / "factor_source_data_tw"
+    tw_debug = Path(st.data_dir) / "qlab" / "factor_source_data_tw_debug"
+    tw100 = Path(st.data_dir) / "qlab" / "factor_source_data_tw100"
+    # 演化宇宙選擇（不依賴 LLM 供應商）：fin_factor 因子執行固定用
+    # data_folder_debug（RD-Agent FIXME 行為），因此「演化宇宙」實際由 DEBUG
+    # 目錄決定 → tw100 模式把 DEBUG 指到代碼前 100 檔（與回測口徑一致）。
+    debug_dir = tw_debug
+    if universe == "tw100":
+        if not (tw100 / "daily_pv.h5").exists():
+            raise FileNotFoundError(
+                f"找不到 {tw100 / 'daily_pv.h5'}；先跑 `uv run python -m qlab export-tw100`"
+            )
+        debug_dir = tw100
+    elif universe == "debug":
+        debug_dir = tw_debug
+    if (tw_source / "daily_pv.h5").exists() and (debug_dir / "daily_pv.h5").exists():
+        _force_set(env, "FACTOR_COSTEER_DATA_FOLDER", str(tw_source))
+        _force_set(env, "FACTOR_COSTEER_DATA_FOLDER_DEBUG", str(debug_dir))
+    # 假設性引導：RD-Agent 以 QLIB_FACTOR_HYPOTHESIS_GEN 覆寫假設生成類別
+    # （FactorBasePropSetting 的 env_prefix=QLIB_FACTOR_）。
+    if guidance == "short":
+        _force_set(env, "QLIB_FACTOR_HYPOTHESIS_GEN", "qlab.short_factor_proposal.GuidedShortFactorHypothesisGen")
     # 讓 RD-Agent 產物集中在 data/qlab 下（不入版控）
-    workdir = Path(settings.data_dir) / "qlab" / "rdagent_workspace"
+    workdir = Path(st.data_dir) / "qlab" / "rdagent_workspace"
     workdir.mkdir(parents=True, exist_ok=True)
     env.setdefault("RDA_GIT_HTTP_PROXY", "")
     return env
 
 
-def run_rdagent(args: list[str], cwd: Path | None = None, check: bool = True) -> int:
-    """執行 rdagent CLI，串流輸出（互動式應用需在同一終端觀察進度）。"""
+def run_rdagent(
+    args: list[str],
+    cwd: Path | None = None,
+    check: bool = True,
+    universe: str = "full",
+    guidance: str = "none",
+) -> int:
+    """執行 rdagent CLI，串流輸出（互動式應用需在同一終端觀察進度）。
+
+    ``universe``：full / tw100 / debug（因子演化資料宇宙，見 build_rdagent_env）。
+    ``guidance``：none / short（假設性引導，見 qlab.short_factor_proposal）。
+    """
     rdagent = shutil.which("rdagent")
     if rdagent is None:
         raise FileNotFoundError(
@@ -116,7 +147,7 @@ def run_rdagent(args: list[str], cwd: Path | None = None, check: bool = True) ->
     workdir.mkdir(parents=True, exist_ok=True)
     proc = subprocess.run(
         [rdagent, *args],
-        env=build_rdagent_env(),
+        env=build_rdagent_env(universe=universe, guidance=guidance),
         cwd=str(workdir),
         check=False,
     )
