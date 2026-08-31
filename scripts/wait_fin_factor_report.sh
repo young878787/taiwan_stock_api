@@ -19,6 +19,18 @@ if [[ "${1:-}" == "--now" ]]; then
 fi
 
 echo "[$(date '+%H:%M:%S')] 開始監控 fin_factor 主程序..." >> "$LOG"
+# 先等主程序「出現」（避免啟動 race：主程序還沒起來就被判定結束）；最多等 15 分鐘
+waited=0
+until pgrep -f "$PROC_MATCH" >/dev/null 2>&1; do
+  waited=$((waited + 120))
+  if (( waited >= 900 )); then
+    echo "[$(date '+%H:%M:%S')] 等 15 分鐘仍未見 fin_factor 主程序，放棄（不產報告）" >> "$LOG"
+    exit 1
+  fi
+  echo "[$(date '+%H:%M:%S')] 主程序尚未出現，續等（${waited}s）..." >> "$LOG"
+  sleep 120
+done
+echo "[$(date '+%H:%M:%S')] 已偵測到 fin_factor 主程序，開始等待其結束" >> "$LOG"
 # 等待主程序消失
 rc=1
 while true; do

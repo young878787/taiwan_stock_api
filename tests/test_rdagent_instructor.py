@@ -324,7 +324,11 @@ def test_runner_injects_tw_factor_folder(test_settings, monkeypatch):
     monkeypatch.setattr("qlab.rdagent_runner.settings", test_settings)
     env = build_rdagent_env(test_settings)
     assert env["FACTOR_COSTEER_DATA_FOLDER"] == str(_tw)
-    assert env["FACTOR_COSTEER_DATA_FOLDER_DEBUG"] == str(_dbg)
+    # DEBUG 指到執行用副本（<原名>_exec）：RD-Agent 因子碼經 symlink 回寫不再毀源檔
+    assert env["FACTOR_COSTEER_DATA_FOLDER_DEBUG"] == str(
+        test_settings.data_dir / "qlab" / "factor_source_data_tw_debug_exec"
+    )
+    assert (_dbg / "daily_pv.h5").exists()  # 源檔仍在
     # 因子執行 python 指到 conda env 絕對路徑（根治 ModuleNotFound pandas）
     assert env["FACTOR_COSTEER_PYTHON_BIN"] == str(
         Path.home() / "miniconda3" / "envs" / "rdagent4qlib" / "bin" / "python"

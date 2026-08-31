@@ -26,6 +26,23 @@ def _force_set(env: dict[str, str], key: str, value: str) -> None:
         env[key] = value
 
 
+def _prepare_exec_copy(src_dir: Path) -> Path:
+    """建立執行用資料副本（``<原名>_exec``）。
+
+    RD-Agent 會把 DEBUG 資料夾內的檔案以 **symlink** link 進因子工作區，
+    LLM 生成的因子碼一旦寫入 ``daily_pv.h5`` 就會穿透連結覆寫源檔
+    （2026-08-31 實際發生：候選因子碼過濾宇宙後 to_hdf 回寫，毀了 tw100）。
+    讓 RD-Agent 只拿到副本，源檔即免疫。每次啟動重新複製（成本僅數 MB）。
+    """
+    exec_dir = src_dir.parent / f"{src_dir.name}_exec"
+    exec_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("daily_pv.h5", "README.md"):
+        src = src_dir / name
+        if src.exists():
+            shutil.copy2(src, exec_dir / name)
+    return exec_dir
+
+
 def build_rdagent_env(
     s: Settings | None = None,
     universe: str = "full",
@@ -114,7 +131,7 @@ def build_rdagent_env(
         debug_dir = tw_debug
     if (tw_source / "daily_pv.h5").exists() and (debug_dir / "daily_pv.h5").exists():
         _force_set(env, "FACTOR_COSTEER_DATA_FOLDER", str(tw_source))
-        _force_set(env, "FACTOR_COSTEER_DATA_FOLDER_DEBUG", str(debug_dir))
+        _force_set(env, "FACTOR_COSTEER_DATA_FOLDER_DEBUG", str(_prepare_exec_copy(debug_dir)))
     # 假設性引導：RD-Agent 以 QLIB_FACTOR_HYPOTHESIS_GEN 覆寫假設生成類別
     # （FactorBasePropSetting 的 env_prefix=QLIB_FACTOR_）。
     if guidance == "short":
