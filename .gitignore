@@ -54,3 +54,9 @@ prompt_cache.db
 
 # 策略資料夾內的可重生因子值（regenerable via qlab backtest）
 strategy/**/*.h5
+
+# 暫存與本機文件產物（docs/ 內已追蹤的 .md 不受影響）
+tmp/
+docs/*
+!docs/qlab_setup.md
+!docs/taiwan_stock_api_architecture_summary.md

@@ -112,12 +112,18 @@ class FinMindAdapter(DataSourceAdapter):
                 # 0 元價格不可能是真實成交，直接略過，避免 0 價污染下游
                 # （inf 報酬、復權因子除零、量能指標失真等）。
                 continue
+            open_ = _to_float(_pick(row, "open"))
+            if open_ is None or open_ <= 0:
+                # open=0/負值為 FinMind 舊資料缺陷（high/low/close/量皆正常、
+                # 僅 open 異常，2026-09 全庫掃出 48 筆）。真實成交日不該缺開盤價，
+                # 以 close 修補，避免 downstream 算當日漲跌時除以 0。
+                open_ = close
             records.append(
                 {
                     "symbol": _pick(row, "symbol") or symbol,
                     "market": market,
                     "date": _pick(row, "date"),
-                    "open": _to_float(_pick(row, "open")),
+                    "open": open_,
                     "high": _to_float(_pick(row, "high")),
                     "low": _to_float(_pick(row, "low")),
                     "close": close,

@@ -36,10 +36,13 @@ EXISTING_FACTORS = (
     "volatility_20d",
     "downside_deviation_20d",
     "volume_change_5d",
-    # 2026-08-31 做空導向演化已產出（tw100 宇宙）
+    # 2026-08-31 做空導向演化已產出且「實測無做空預測力」（tw100 宇宙、5 日前瞻 IC）：
+    # upper_shadow_ratio / down_volume_share / Down_Volume_Dominance_Ratio ≈ 0；
+    # gap_down_frequency 為顯著正 IC（t=3.76，反向）。
     "upper_shadow_ratio",
     "down_volume_share",
     "gap_down_frequency",
+    "Down_Volume_Dominance_Ratio",
 )
 
 _SHORT_GUIDANCE = """
@@ -62,7 +65,11 @@ HARD EXCLUSIONS (do NOT propose):
    daily_return, momentum_5d, momentum_10d, momentum_20d, risk_adjusted_momentum_20d,
    ma_deviation_20d, obv_10d_change, realized_vol_10d, volatility_20d,
    downside_deviation_20d, volume_change_5d, upper_shadow_ratio, down_volume_share,
-   gap_down_frequency.
+   gap_down_frequency, Down_Volume_Dominance_Ratio.
+   The last four were already attempted as short-side factors in this exact universe and
+   showed NO predictive power (IC≈0) or the OPPOSITE sign (gap_down_frequency: significant
+   positive IC - high gap-down frequency predicts RISES here). Moving to different
+   information sources or construction principles is required, not re-rolling these.
 3. Do NOT re-propose generic short-term price reversal ("negative N-day return") - that is
    just the sign of the existing momentum factors.
 4. A new factor must introduce genuinely NEW information or a NEW construction (new

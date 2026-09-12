@@ -95,6 +95,41 @@ def test_get_daily_bars_drops_suspension_zero_rows(monkeypatch):
     assert df["date"].to_list() == [datetime.date(2024, 1, 2), datetime.date(2024, 1, 3)]
 
 
+def test_get_daily_bars_repairs_zero_open(monkeypatch):
+    """open=0/負值但 high/low/close/量正常 → adapter 以 close 修補 open，不丟列。"""
+    adapter = _make()
+    rows = [
+        *_price_rows(),
+        {
+            "stock_id": "2330",
+            "date": "2024-01-04",
+            "open": 0.0,
+            "max": 605.0,
+            "min": 595.0,
+            "close": 600.0,
+            "Trading_Volume": 8000,
+            "Trading_money": 4_800_000,
+            "Trading_tickets": 900,
+        },
+        {
+            "stock_id": "2330",
+            "date": "2024-01-05",
+            "open": None,
+            "max": 610.0,
+            "min": 600.0,
+            "close": 610.0,
+            "Trading_Volume": 5000,
+            "Trading_money": 3_000_000,
+            "Trading_tickets": 600,
+        },
+    ]
+    monkeypatch.setattr(adapter, "_get_json", lambda params: rows)
+    df = adapter.get_daily_bars("2330", "2024-01-01", "2024-01-31")
+    assert df.height == 4
+    assert df["open"].to_list() == [590.0, 600.0, 600.0, 610.0]
+    assert (df["open"] <= 0).sum() == 0
+
+
 def test_volume_unit_shares_no_multiply(monkeypatch):
     adapter = _make(volume_unit="shares")
     monkeypatch.setattr(adapter, "_get_json", lambda params: _price_rows())
