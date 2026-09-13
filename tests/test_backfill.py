@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 from datetime import date
 
 import polars as pl
@@ -14,8 +15,10 @@ from kstock.backfill import (
     BackfillStats,
     _clean_error,
     _fetch_with_retry,
+    load_delisted_symbols,
     load_universe_symbols,
     run_backfill,
+    run_delisted_backfill,
     year_segments,
 )
 from kstock.storage.parquet import ParquetStore
@@ -225,3 +228,89 @@ def test_clean_error_masks_token():
     masked = _clean_error(e)
     assert "SECRET" not in masked
     assert "token=***" in masked
+
+
+# ---- 下市回填模式（WP4） ----
+
+SAMPLE_DELISTED_CSV = (
+    "symbol,name,delist_date,source\n"
+    "2841,台開,2022-08-04,twse_terminated\n"
+    "1001,早退,2005-01-01,twse_terminated\n"
+    "9999,無日期,,mi_index_sampling\n"
+)
+
+
+def test_load_delisted_symbols_filters_and_parses(tmp_path):
+    p = tmp_path / "delisted.csv"
+    p.write_text(SAMPLE_DELISTED_CSV, encoding="utf-8")
+    rows = load_delisted_symbols(p, "2008-01-01")
+    # 早退（2005 < 2008 起點）被剔除；無日期保留（None）
+    assert rows == [("2841", "2022-08-04"), ("9999", None)]
+
+
+def test_run_delisted_backfill_clips_at_delist_date(store: ParquetStore, tmp_path):
+    # 2841 台開：2008-2022 歷史 + 下市後（2022-09，重用代碼/新公司）價格 → 後者不得入庫
+    bars = make_daily_bars(
+        "2841",
+        ["2012-03-05", "2012-03-06", "2022-08-04", "2022-09-05"],
+        [10.0, 10.1, 9.9, 88.8],
+    )
+    adapter = FakeBackfillAdapter(bars)
+    csv_path = tmp_path / "delisted.csv"
+    csv_path.write_text(SAMPLE_DELISTED_CSV, encoding="utf-8")
+    stats = run_delisted_backfill(
+        delisted_csv=csv_path,
+        start="2008-01-01",
+        tables=("daily",),
+        sleep_seconds=0.0,
+        adapter=adapter,
+        store=store,
+    )
+    written = store.read_normalized("daily", symbols=["2841"]).sort("date")
+    # 9999（無日期）也會被回補到今天——fixture bars 只含 2841，其段回空
+    assert written["date"].max() <= datetime.date(2022, 8, 4)  # 裁切生效：2022-09-05 不入庫
+    assert written["date"].min() == datetime.date(2012, 3, 5)
+    assert written["close"].to_list() == [10.0, 10.1, 9.9]
+    assert stats.failures == []
+    # 早退（2005 下市）不發請求
+    called = {s for _, s, _ in adapter.calls}
+    assert "1001" not in called
+
+
+def test_run_delisted_backfill_dry_run(tmp_path, capsys):
+    p = tmp_path / "delisted.csv"
+    p.write_text(SAMPLE_DELISTED_CSV, encoding="utf-8")
+    stats = run_delisted_backfill(delisted_csv=p, start="2008-01-01", dry_run=True)
+    out = capsys.readouterr().out
+    assert "[dry-run] 下市回填 2 檔" in out
+    assert stats.rows_written == 0
+
+
+def test_main_delisted_csv_mode(tmp_path, monkeypatch, capsys):
+    from kstock import backfill as bf
+
+    p = tmp_path / "delisted.csv"
+    p.write_text(SAMPLE_DELISTED_CSV, encoding="utf-8")
+
+    class FakeAdapter(FakeBackfillAdapter):
+        def __init__(self):
+            super().__init__(
+                pl.DataFrame(
+                    schema={
+                        "symbol": pl.Utf8, "market": pl.Utf8, "date": pl.Date,
+                        "open": pl.Float64, "high": pl.Float64, "low": pl.Float64,
+                        "close": pl.Float64, "volume_shares": pl.Int64,
+                        "turnover_twd": pl.Float64, "trade_count": pl.Int64, "source": pl.Utf8,
+                    }
+                )
+            )
+
+    fake = FakeAdapter()
+    monkeypatch.setattr(bf, "FinMindAdapter", lambda: fake)
+    monkeypatch.setattr(bf, "ParquetStore", lambda: ParquetStore(settings_=None) if False else ParquetStore(root=tmp_path / "store"))
+    rc = bf.main(
+        ["--delisted-csv", str(p), "--start", "2008-01-01", "--sleep", "0"],
+    )
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "下市回填 2 檔" in out
