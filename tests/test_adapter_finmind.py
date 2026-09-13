@@ -144,21 +144,61 @@ def test_field_names_introspection(monkeypatch):
 
 
 def test_get_instruments(monkeypatch):
+    """2026 改版後 TaiwanStockInfo 僅 5 欄（industry_category/stock_id/stock_name/type/date）：
+    無 delist_date、date 是異動快照日≠list_date、type 含 emerging。"""
     adapter = _make()
     monkeypatch.setattr(
         adapter,
         "_get_json",
         lambda params: [
-            {"stock_id": "2330", "stock_name": "台積電", "type": "twse", "industry": "半導體"},
+            {
+                "industry_category": "半導體",
+                "stock_id": "2330",
+                "stock_name": "台積電",
+                "type": "twse",
+                "date": "2026-09-11",
+            },
+            {
+                "industry_category": "ETF",
+                "stock_id": "0050",
+                "stock_name": "元大台灣50",
+                "type": "tpex",
+                "date": "2026-09-11",
+            },
+            {
+                "industry_category": "生技業",
+                "stock_id": "1234",
+                "stock_name": "興櫃範例",
+                "type": "emerging",
+                "date": "2026-09-11",
+            },
         ],
     )
     df = adapter.get_instruments()
-    assert df.height == 1
-    row = df.row(0, named=True)
-    assert row["symbol"] == "2330"
-    assert row["name"] == "台積電"
-    assert row["market"] == "TSE"
-    assert row["industry"] == "半導體"
+    assert df.height == 3
+    assert df.columns == [
+        "symbol", "name", "market", "industry", "list_date", "delist_date", "status",
+        "snapshot_date",
+    ]
+    rows = {r["symbol"]: r for r in df.iter_rows(named=True)}
+    assert rows["2330"]["market"] == "TSE"
+    assert rows["0050"]["market"] == "OTC"
+    assert rows["1234"]["market"] == "EMG"
+    assert rows["2330"]["name"] == "台積電"
+    assert rows["2330"]["industry"] == "半導體"
+    assert rows["2330"]["list_date"] is None  # date 是異動快照日，不可誤用為上市日
+    assert rows["1234"]["list_date"] is None
+    assert rows["1234"]["delist_date"] is None  # 欄位已從 dataset 消失，防禦性保留
+    assert rows["1234"]["status"] == "active"
+    assert rows["2330"]["snapshot_date"] == datetime.date(2026, 9, 11)  # date 保留為 snapshot_date
+
+
+def test_get_instruments_empty(monkeypatch):
+    adapter = _make()
+    monkeypatch.setattr(adapter, "_get_json", lambda params: [])
+    df = adapter.get_instruments()
+    assert df.height == 0
+    assert df["list_date"].dtype == pl.Date
 
 
 def _institutional_rows() -> list[dict]:

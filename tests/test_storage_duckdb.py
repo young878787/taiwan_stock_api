@@ -1,5 +1,7 @@
 from conftest import make_daily_bars
 
+import polars as pl
+
 from kstock.storage.parquet import ParquetStore
 
 
@@ -31,6 +33,29 @@ def test_view_missing_table_creates_placeholder(duck):
     duck.register_view("does_not_exist")
     duck.register_views(("does_not_exist_too",))
     assert duck.query("SELECT * FROM does_not_exist LIMIT 1").height == 0
+
+
+def test_register_view_reference_table_layout(store: ParquetStore, duck):
+    """單檔參考表版式（無 year= 目錄）register_view 也能查到。"""
+    df = pl.DataFrame(
+        {
+            "symbol": ["2330", "0050"],
+            "name": ["台積電", "元大台灣50"],
+            "market": ["TSE", "TSE"],
+            "industry": ["半導體", "ETF"],
+            "list_date": [None, None],
+            "delist_date": [None, None],
+            "status": ["active", "active"],
+        },
+        schema_overrides={"list_date": pl.Date, "delist_date": pl.Date},
+    )
+    store.write_reference_table("instrument", df, subset=["symbol"])
+    duck.register_view("instrument")
+
+    out = duck.query("SELECT count(*) AS n FROM instrument")
+    assert out["n"][0] == 2
+    markets = duck.query("SELECT market FROM instrument ORDER BY symbol")
+    assert markets["market"].to_list() == ["TSE", "TSE"]
 
 
 def test_table_exists(store: ParquetStore, duck):

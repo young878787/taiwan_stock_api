@@ -63,6 +63,7 @@ INSTRUMENT_COLUMNS = [
     "list_date",
     "delist_date",
     "status",
+    "snapshot_date",
 ]
 
 INSTITUTIONAL_COLUMNS = [
@@ -163,6 +164,9 @@ TABLE_DTYPES: dict[str, dict[str, pl.DataType]] = {
         "list_date": pl.Date,
         "delist_date": pl.Date,
         "status": pl.Utf8,
+        # TaiwanStockInfo 的「資料異動快照日」：活躍股日日更新（≈今天），
+        # stale 舊列混有已下市/異動歷史 → 判定現活躍需以 max(snapshot_date) 近期為準
+        "snapshot_date": pl.Date,
     },
     "institutional": {
         "symbol": pl.Utf8,

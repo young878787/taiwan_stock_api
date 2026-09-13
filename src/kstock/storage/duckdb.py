@@ -20,13 +20,19 @@ class DuckStore:
         self._con.close()
 
     def register_view(self, table: str) -> None:
-        files = sorted(self.normalized_dir.joinpath(table).glob("year=*/*.parquet"))
-        if not files:
-            self._con.execute(
-                f"CREATE OR REPLACE VIEW {table} AS SELECT NULL::INT AS _empty WHERE 1=0"
-            )
-            return
-        glob = str(self.normalized_dir / table / "year=*" / "*.parquet").replace("\\", "/")
+        table_dir = self.normalized_dir / table
+        files = sorted(table_dir.glob("year=*/*.parquet"))
+        if files:
+            glob = str(table_dir / "year=*" / "*.parquet").replace("\\", "/")
+        else:
+            # 單檔參考表版式（無 date 表如 instrument：normalized/<table>/data.parquet）
+            single = sorted(table_dir.glob("*.parquet"))
+            if not single:
+                self._con.execute(
+                    f"CREATE OR REPLACE VIEW {table} AS SELECT NULL::INT AS _empty WHERE 1=0"
+                )
+                return
+            glob = str(single[0]).replace("\\", "/")
         self._con.execute(
             f"CREATE OR REPLACE VIEW {table} AS SELECT * FROM read_parquet('{glob}')"
         )

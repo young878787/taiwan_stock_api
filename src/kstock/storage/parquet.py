@@ -50,8 +50,30 @@ class ParquetStore:
                 part = pl.concat([merged, part]).unique(subset=["symbol", "date"], keep="last")
             part.write_parquet(target, compression="zstd")
 
+    def write_reference_table(self, table: str, df: pl.DataFrame, subset: list[str]) -> None:
+        """無 date 欄位參考表（如 instrument）的單檔全量 upsert。
+
+        與 write_normalized 的差異：
+        - 不按年分割（無 date 可分），寫 ``normalized/<table>/data.parquet`` 單檔。
+        - 冪等鍵為 subset（如 instrument 用 ["symbol"]），非 (symbol, date)；
+          同樣 concat 後 ``keep="last"``，同鍵重跑是新值覆蓋而非 append。
+        - DuckStore.register_view 已支援此單檔版式（year=* 找不到時退回
+          ``<table>/*.parquet``），落地後 view 自動生效，無需額外處理。
+        """
+        if df.height == 0:
+            return
+        target = self.normalized_dir / table / "data.parquet"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        merged = pl.concat([pl.read_parquet(target), df]) if target.exists() else df
+        merged = merged.unique(subset=subset, keep="last")
+        merged.write_parquet(target, compression="zstd")
+
     def normalized_files(self, table: str) -> list[Path]:
-        return sorted((self.normalized_dir / table).glob("year=*/*.parquet"))
+        # 雙版式：year=* 分割表優先；無 date 參考表退回單檔 <table>/data.parquet
+        files = sorted((self.normalized_dir / table).glob("year=*/*.parquet"))
+        if not files:
+            files = sorted((self.normalized_dir / table).glob("*.parquet"))
+        return files
 
     def read_raw(self, provider: str, dataset: str) -> pl.DataFrame | None:
         target = self.raw_dir / provider / dataset / "data.parquet"

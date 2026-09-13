@@ -1,3 +1,7 @@
+import datetime
+
+import polars as pl
+
 from conftest import make_daily_bars
 
 from kstock.storage.parquet import ParquetStore
@@ -49,3 +53,47 @@ def test_read_empty_table_returns_typed(store: ParquetStore):
     df = store.read_normalized("daily")
     assert df.height == 0
     assert "volume_shares" in df.columns
+
+
+def _instrument_df() -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "symbol": ["2330", "0050"],
+            "name": ["台積電", "元大台灣50"],
+            "market": ["TSE", "TSE"],
+            "industry": ["半導體", "ETF"],
+            "list_date": [datetime.date(1994, 9, 5), datetime.date(2003, 6, 30)],
+            "delist_date": [None, None],
+            "status": ["active", "active"],
+        }
+    )
+
+
+def test_write_reference_table_upsert_idempotent(store: ParquetStore):
+    df = _instrument_df()
+    store.write_reference_table("instrument", df, subset=["symbol"])
+
+    target = store.normalized_dir / "instrument" / "data.parquet"
+    assert target.exists()
+    # 單檔版式：無 year= 目錄
+    assert not list((store.normalized_dir / "instrument").glob("year=*"))
+    assert pl.read_parquet(target).height == 2
+
+    # 同 symbol 新值 → keep="last" 冪等：height 不變、值為新值
+    updated = df.with_columns(
+        pl.when(pl.col("symbol") == "2330")
+        .then(pl.lit("台積電（更名）"))
+        .otherwise(pl.col("name"))
+        .alias("name")
+    )
+    store.write_reference_table("instrument", updated, subset=["symbol"])
+    merged = pl.read_parquet(target)
+    assert merged.height == 2
+    assert merged.filter(pl.col("symbol") == "2330")["name"][0] == "台積電（更名）"
+
+
+def test_write_reference_table_empty_noop(store: ParquetStore):
+    store.write_reference_table(
+        "instrument", pl.DataFrame(schema={"symbol": pl.Utf8}), subset=["symbol"]
+    )
+    assert not (store.normalized_dir / "instrument").exists()

@@ -141,34 +141,51 @@ class FinMindAdapter(DataSourceAdapter):
         )
 
     def get_instruments(self) -> pl.DataFrame:
+        """抓 TaiwanStockInfo → instrument 標準 schema（單檔參考表用）。
+
+        2026 改版後 dataset 僅 5 欄：industry_category, stock_id, stock_name,
+        type, date。注意：
+        - 無 ``delist_date``：以 row.get 防禦性保留欄位（前向相容，通常為 None）。
+        - ``date`` 是「資料異動快照日」非上市日 → list_date 固定 None，不可誤用。
+        - ``type`` ∈ {twse, tpex, emerging}，映射 TSE/OTC/EMG，未知值原樣保留。
+        - 官方欄位再變動時，先用 ``field_names("TaiwanStockInfo")`` 對照實際欄位。
+        """
         rows = self.fetch_rows(_STOCK_INFO_DATASET)
         records = []
         for row in rows:
+            market_type = row.get("type") or ""
+            if market_type == "twse":
+                market = "TSE"
+            elif market_type == "tpex":
+                market = "OTC"
+            elif market_type == "emerging":
+                market = "EMG"
+            else:
+                market = market_type
             records.append(
                 {
                     "symbol": _pick(row, "symbol"),
                     "name": row.get("stock_name") or row.get("name") or "",
-                    "market": (
-                        "TSE"
-                        if row.get("type") in ("twse", "上市")
-                        else "OTC"
-                        if row.get("type") in ("tpex", "上櫃", "興櫃")
-                        else row.get("type") or ""
-                    ),
-                    "industry": row.get("industry") or "",
-                    "list_date": row.get("list_date") or row.get("date") or "",
-                    "delist_date": row.get("delist_date") or "",
-                    "status": (
-                        "active"
-                        if row.get("status") in (None, "正常")
-                        else str(row.get("status", ""))
-                    ),
+                    "market": market,
+                    "industry": row.get("industry_category") or "",
+                    "list_date": None,
+                    "delist_date": row.get("delist_date"),
+                    "status": row.get("status") or "active",
+                    # date = 資料異動快照日（活躍股≈今天；stale 列混有已下市歷史）
+                    "snapshot_date": row.get("date"),
                 }
             )
         if not records:
             return empty_dataframe("instrument")
-        df = pl.DataFrame(records)
-        return df.with_columns(pl.col("list_date").str.strptime(pl.Date, "%Y-%m-%d", strict=False))
+        df = pl.DataFrame(
+            records,
+            schema_overrides={"list_date": pl.Utf8, "delist_date": pl.Utf8, "snapshot_date": pl.Utf8},
+        )
+        return df.with_columns(
+            pl.col("list_date").str.strptime(pl.Date, "%Y-%m-%d", strict=False),
+            pl.col("delist_date").str.strptime(pl.Date, "%Y-%m-%d", strict=False),
+            pl.col("snapshot_date").str.strptime(pl.Date, "%Y-%m-%d", strict=False),
+        )
 
     def get_institutional(
         self, symbol: str, start_date: str | None = None, end_date: str | None = None
