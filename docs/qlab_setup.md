@@ -187,9 +187,10 @@ uv run python -m qlab rdagent fin_factor      # 現在跑的是台股因子演�
 ### 7.5 回測宇宙與大盤基準
 
 - **回測宇宙**：`export-tw100` 從正式版 daily_pv.h5 切前 N 檔（不重抓、零誤差），
-  預設依**代碼序**（`--order code`，與 `backtest --top-symbols` 同口徑）；
-  `--order turnover` 改依成交金額排名（`data/universe/top_liquidity_300.csv`），
-  僅供對照實驗——2026-08-31 實測 `volume_change_5d` 訊號在流動性前 100 失效（見 strategy README）。
+  固定依**代碼序**（`UniverseSpec.code_first_n`，與 `backtest --top-symbols` 同口徑）。
+  舊 `--order turnover`（成交金額排名對照實驗）已於 2026-08-31 實測
+  `volume_change_5d` 訊號在流動性前 100 失效後**移除**（結論見 strategy README / AGENTS.md）。
+  宇宙語意單一來源為 `qlab/universe.py` 的 `UniverseSpec`。
 - **基準**：backtest / OOS 報告的基準為**臺灣大盤 TAIEX 報酬指數（含息）**
   （`qlab/benchmark.py` 經 FinMind `TaiwanStockTotalReturnIndex` 抓取，
   快取 `data/qlab/benchmark_taiex.parquet`，已涵蓋請求區間時離線重跑不再打 API；

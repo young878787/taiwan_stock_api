@@ -60,7 +60,7 @@ uv run python -m qlab rdagent quant   # RD-Agent（需 Docker + LLM 金鑰）
 
 # fin_factor 因子演化（台股 daily_pv.h5；金鑰由 .env 自動注入）
 uv run python -m qlab export-h5                    # 台股日K → daily_pv.h5（正式版 + debug 20 檔）
-uv run python -m qlab export-tw100                 # 切出代碼前 100 檔 → factor_source_data_tw100/（--order turnover 切成交金額序，對照用）
+uv run python -m qlab export-tw100                 # 切出代碼前 100 檔 → factor_source_data_tw100/（code_first_n 正式口徑）
 uv run python -m qlab rdagent fin_factor --universe tw100   # 演化宇宙=前 100 檔（與回測口徑一致）
 uv run python -m qlab rdagent fin_factor --universe tw100 --guidance short
                                                    # 假設性引導：做空導向（高值→未來跌；
@@ -106,7 +106,7 @@ store.write_normalized("margin", margin)
 - 融資券資料源 `TaiwanStockMarginPurchaseShortSale`，單位為張，Adapter 自動 ×1000 轉股。
 - 皆輸出標準 schema（`models/schema.py`），可寫入 Parquet 或由 DuckDB 查詢。
 
-### 選股宇宙（ML 用前 N 大流動性）
+### 選股宇宙（採集清單 / collection manifest）
 
 ```python
 from kstock.universe.twse_whole_market import WholeMarketQuotes, select_top_liquid
@@ -115,6 +115,17 @@ quotes = WholeMarketQuotes()
 frames = quotes.fetch_recent_days(sample_days=5)     # 近 5 個交易日全市場報表（TWSE）
 top = select_top_liquid(frames, n=300)               # 依日均成交金額排名（排除 ETF、低價股）
 top.write_csv("data/universe/top_liquidity_300.csv")
+```
+
+> **宇宙語意分工**（詳見 `docs/layering_and_universe_design.md`）：`data/universe/`
+> 下的清單是**採集範圍 manifest**（決定 backfill 抓哪些代碼，如 top_liquidity_300.txt），
+> 不是回測宇宙；回測宇宙由 `qlab.universe.UniverseSpec` 定義（`code_first_n` 正式口徑），
+> 兩者不得混用。歷史宇宙回推（含下市候選清單）見「歷史宇宙回推」段。
+
+```bash
+uv run python -m kstock.instruments                   # TaiwanStockInfo → instrument 參考表（單檔 upsert）
+uv run python -m kstock.universe_history --start 2008-01-01 --sleep 5   # MI_INDEX 月抽樣 + 官方終止上市清單 → manifest
+uv run python -m kstock.backfill --delisted-csv data/universe/manifests/delisted_tw_YYYYMMDD.csv --start 2008-01-01 --tables daily   # 下市股回補（delist_date 裁切）
 ```
 
 資料品質：`clean_daily(df)` 可在 ML 訓練前移除停牌等無效價格列；
