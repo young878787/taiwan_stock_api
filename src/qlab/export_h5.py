@@ -233,76 +233,36 @@ def to_daily_pv(
     return out
 
 
-def _load_turnover_ranked_symbols(csv_path: Path) -> list[str]:
-    """讀宇宙排名 CSV（rank,symbol,name,...），回傳依平均成交金額排名的 symbol 清單。
-
-    全欄位以字串讀入（infer_schema_length=0），避免代碼前導零被當數字吃掉。
-    """
-    import polars as pl
-
-    df = pl.read_csv(csv_path, infer_schema_length=0)
-    return df.sort(pl.col("rank").cast(pl.Int64))["symbol"].to_list()
-
-
-def _strip_market(instrument: str) -> str | None:
-    """``TSE2330``/``OTC1234`` → ``2330``/``1234``；非 3 字母市場前綴回 None。"""
-    if len(instrument) > 3 and instrument[:3].isalpha():
-        return instrument[3:]
-    return None
-
-
 def slice_top_symbols(
     src: Path | None = None,
     n: int = 100,
     output_dir: Path | None = None,
-    order: str = "code",
-    universe_csv: Path | None = None,
 ) -> ExportReport:
-    """從既有正式版 daily_pv.h5 切出前 N 檔子集。
+    """從既有正式版 daily_pv.h5 切出前 N 檔子集（固定 code 序，正式口徑）。
 
-    ``order="code"``（預設）：``sorted(instruments)[:n]``（代碼序，OTC < TSE），
-    為策略驗證的正式口徑。``order="turnover"``：依宇宙 CSV（
-    ``data/universe/top_liquidity_300.csv``，近 5 日平均成交金額排名）取前 N 檔，
-    僅供對照實驗（2026-08-31 實測 volume_change_5d 訊號在該宇宙失效，已棄用）。
+    切片規則：``sorted(instruments)[:n]``（代碼序，OTC < TSE），與
+    :class:`qlab.universe.UniverseSpec` 的 ``code_first_n`` 口徑一致，也是回測
+    ``--top-symbols`` 的同一宇宙語意。直接切片不重抓、不做任何計算
+    → 與正式版逐列零誤差（含 $factor）。
 
-    直接切片不重抓、不做任何計算 → 與正式版逐列零誤差（含 $factor）。
-
-    注意：回測 ``--top-symbols`` 是代碼序（見 :func:`qlab.factor_backtest`），
-    兩者口徑一致。
+    註：turnover（成交金額排名）口徑已於 2026-08-31 對照實驗證實失效
+    （volume_change_5d 訊號在流動性前 100 失效，結論保留在 AGENTS.md），
+    已移除該分支，不做功能回退。
     """
     src = src or kstock_settings.data_dir / "qlab" / "factor_source_data_tw" / "daily_pv.h5"
     if not src.exists():
         raise FileNotFoundError(f"來源 h5 不存在：{src}（先跑 `uv run python -m qlab export-h5`）")
     df = pd.read_hdf(src, key="data")
-    insts = sorted(df.index.get_level_values("instrument").unique())
-    if order == "turnover":
-        csv = universe_csv or kstock_settings.data_dir / "universe" / "top_liquidity_300.csv"
-        ranked: list[str] = []
-        if csv.exists():
-            by_sym = {}
-            for inst in insts:
-                sym = _strip_market(inst)
-                if sym is not None:
-                    by_sym[sym] = inst
-            ranked = [by_sym[s] for s in _load_turnover_ranked_symbols(csv) if s in by_sym]
-        else:
-            print(f"  找不到宇宙 CSV（{csv}），fallback 代碼序")
-        syms = (ranked + [i for i in insts if i not in set(ranked)])[:n]
-    else:
-        syms = insts[:n]
+    syms = sorted(df.index.get_level_values("instrument").unique())[:n]
     out = df[df.index.get_level_values("instrument").isin(syms)].sort_index()
     target = output_dir or kstock_settings.data_dir / "qlab" / f"factor_source_data_tw{n}"
     target.mkdir(parents=True, exist_ok=True)
     out.to_hdf(target / "daily_pv.h5", key="data")
     # _README_TW 含 {market} 等字面大括號，不能用 .format() → 以字串串接附註
-    if order == "turnover":
-        note = (
-            f"\n- 宇宙：依成交金額排名（data/universe/top_liquidity_300.csv）的前 {len(syms)} 檔（對照實驗用，非正式口徑）。\n"
-        )
-    else:
-        note = (
-            f"\n- 宇宙：依 instrument 排序的前 {len(syms)} 檔（與 `qlab backtest --top-symbols {n}` 相同口徑）。\n"
-        )
+    note = (
+        f"\n- 宇宙：依 instrument 代碼排序的前 {len(syms)} 檔（正式口徑，"
+        f"與 `qlab backtest --top-symbols {n}` 相同口徑）。\n"
+    )
     (target / "README.md").write_text(_README_TW + note, encoding="utf-8")
     dts = out.index.get_level_values("datetime")
     return ExportReport(

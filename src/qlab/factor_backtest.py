@@ -48,12 +48,74 @@ from qlab.factor_report import (
     daily_rank_ic,
     forward_returns,
 )
+from qlab.universe import UniverseSpec
 
 BACKTEST_REPORT_FILENAME = "backtest_report.md"
 
 DEFAULT_FACTORS = ("ma_deviation_20d", "volume_change_5d")
 
 DEFAULT_DATA_H5 = kstock_settings.data_dir / "qlab" / "factor_source_data_tw" / "daily_pv.h5"
+
+
+def _resolve_universe_spec(top_symbols: int | None, universe_spec: UniverseSpec | None) -> UniverseSpec:
+    """解析回測宇宙 spec。
+
+    優先序：顯式 ``universe_spec`` > CLI ``top_symbols``（向後相容別名，
+    ``int → code_first_n``）> 預設 ``all``。語意定義見 :mod:`qlab.universe`。
+    """
+    if universe_spec is not None:
+        return universe_spec
+    if top_symbols is not None:
+        return UniverseSpec.code_first_n(top_symbols)
+    return UniverseSpec.all()
+
+
+def _apply_pit_mask(
+    factor_wides: dict[str, pd.DataFrame],
+    price_df: pd.DataFrame,
+    spec: UniverseSpec,
+    rebalance_days: int,
+) -> tuple[dict[str, pd.DataFrame], str | None]:
+    """PIT 宇宙（spec.kind == "pit_liquidity"）：以資格矩陣過濾因子橫截面。
+
+    因子值在合格標的之外設為 NaN → build_signals 的橫截面排名自動排除；
+    停牌/序列結束（下市）自動退場。其餘 spec 原樣回傳。
+    回傳 (masked factor wides, 報告用「宇宙檔數」描述字串或 None)。
+    """
+    if spec.kind != "pit_liquidity":
+        return factor_wides, None
+    from qlab.universe import pit_eligibility_mask
+
+    mask_full, _size = pit_eligibility_mask(
+        price_df,
+        top_n=spec.n or 0,
+        lookback_days=spec.lookback_days,
+        min_listed_days=spec.min_listed_days,
+    )
+    first = next(iter(factor_wides.values()))
+    masked: dict[str, pd.DataFrame] = {}
+    for name, fw in factor_wides.items():
+        m = mask_full.reindex(index=fw.index, columns=fw.columns).fillna(False)
+        masked[name] = fw.where(m)
+    sizes = mask_full.reindex(index=fw.index).sum(axis=1)
+    sizes = sizes.iloc[::rebalance_days]  # 每個再平衡日的合格檔數
+    uni_desc = (
+        f"再平衡日合格檔數 min {int(sizes.min())} / 中位 {int(sizes.median())} / max {int(sizes.max())}"
+    )
+    return masked, uni_desc
+
+
+def _survivorship_note(spec: UniverseSpec) -> str:
+    """報告固定的幸存者偏差標註（C4）。"""
+    if spec.kind == "pit_liquidity":
+        return (
+            "PIT 定義（滾動流動性前 N、上市滿 N 日、下市退場）：資格逐日以當時資料判定，"
+            "含下市股、無未來資訊；下市前最後價格出場的口徑偏樂觀（長期停牌拍賣價更低）"
+        )
+    return (
+        "靜態宇宙：以資料集現存標的為準——若資料集未涵蓋期間內下市股，"
+        "長期回測績效會系統性高估（倖存者偏差）；本資料集已含下市股者，此標註僅為提醒"
+    )
 
 
 def _factor_python_bin() -> str:
@@ -1051,17 +1113,30 @@ def _prepare_universe(
     top_symbols: int | None,
     workdir: Path | None,
     workspace: Path | None = None,
+    universe_spec: UniverseSpec | None = None,
 ) -> tuple[dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame, pd.DataFrame, str]:
-    """載入（或重跑）因子值與價格，回傳 (因子 wides, 價格長表, 復權 close wide, 原始 close wide, 資料描述)。"""
-    if data is not None or top_symbols is not None:
+    """載入（或重跑）因子值與價格，回傳 (因子 wides, 價格長表, 復權 close wide, 原始 close wide, 資料描述)。
+
+    宇宙由 :class:`qlab.universe.UniverseSpec` 定義：顯式 ``universe_spec`` 優先，
+    否則 ``top_symbols``（int）以 ``code_first_n`` 向後相容別名解析，兩者皆無則
+    ``all``（資料集全部標的）。
+    """
+    spec = _resolve_universe_spec(top_symbols, universe_spec)
+    if data is not None or top_symbols is not None or universe_spec is not None:
         data_path = Path(data) if data is not None else DEFAULT_DATA_H5
         price_df = pd.read_hdf(data_path, key="data")
-        if top_symbols is not None:
-            syms = sorted(price_df.index.get_level_values("instrument").unique())[:top_symbols]
-            price_df = price_df[price_df.index.get_level_values("instrument").isin(syms)]
-            desc = f"{data_path}（前 {top_symbols} 檔，依代碼排序）"
+        if spec.kind == "pit_liquidity":
+            # PIT：不靜態切片（逐日資格矩陣於回測層過濾），因子在全資料集上計算
+            desc = f"{data_path}｜宇宙：{spec.describe()}"
         else:
-            desc = str(data_path)
+            syms = spec.slice_instruments(
+                sorted(price_df.index.get_level_values("instrument").unique())
+            )
+            if spec.kind == "all":
+                desc = str(data_path)
+            else:
+                price_df = price_df[price_df.index.get_level_values("instrument").isin(syms)]
+                desc = f"{data_path}｜宇宙：{spec.describe()}"
         wd = workdir or (kstock_settings.data_dir / "qlab" / "backtest_workdir")
         sub_h5 = wd / "daily_pv.h5"
         sub_h5.parent.mkdir(parents=True, exist_ok=True)
@@ -1093,18 +1168,23 @@ def run_backtest_report(
     top_symbols: int | None = None,
     workdir: Path | None = None,
     trades: bool = False,
+    universe_spec: UniverseSpec | None = None,
 ) -> Path:
     """執行回測並寫出報告，回傳報告路徑。
 
     ``data``／``top_symbols``：指定價格資料集（或在資料集內取前 N 檔子集）時，
     因子值會在**同一宇宙**上重跑（result.h5 的既有因子值僅涵蓋 debug 20 檔）。
+    ``universe_spec``：宣告式宇宙定義（:class:`qlab.universe.UniverseSpec`），
+    優先於 ``top_symbols``；報告 params 會記錄 ``宇宙`` 鍵以利重現。
     ``trades``：額外輸出實際進出倉明細 CSV（``trades_<因子>.csv``，與報告同目錄），
     並在報告尾端附摘要；方向沿用回測解析結果（auto 亦同），確保明細與淨值曲線一致。
     """
-    output = output or (kstock_settings.data_dir / "qlab" / BACKTEST_REPORT_FILENAME)
+    spec = _resolve_universe_spec(top_symbols, universe_spec)
+    output = output or (kstock_settings.data_dir / BACKTEST_REPORT_FILENAME)
     factor_wides, price_df, close_wide, raw_close_wide, data_desc = _prepare_universe(
-        factor_names, data, top_symbols, workdir, workspace=workspace
+        factor_names, data, top_symbols, workdir, workspace=workspace, universe_spec=universe_spec
     )
+    factor_wides, uni_desc = _apply_pit_mask(factor_wides, price_df, spec, rebalance_days)
     results, combined, bench, direction_used = evaluate_portfolios(
         factor_wides,
         close_wide,
@@ -1142,6 +1222,8 @@ def run_backtest_report(
         "方向": direction,
         "緩衝帶": f"{buffer_n} 名（跌出才換）" if buffer_n else "無",
         "資料來源": data_desc,
+        "宇宙": spec.describe(),
+        "偏差標註": _survivorship_note(spec),
         "基準": bench_label,
         "價格口徑": "復權收盤（$close × $factor，含股息）；交易明細成交價為原始價",
         "手續費（單邊）": f"{commission:.4%}",
@@ -1151,6 +1233,8 @@ def run_backtest_report(
         "標的數": str(close_wide.shape[1]),
         "期間": f"{close_wide.index.min()} ~ {close_wide.index.max()}",
     }
+    if uni_desc:
+        params["宇宙檔數（每期）"] = uni_desc
     report = build_report(
         results,
         combined,
@@ -1200,17 +1284,22 @@ def run_oos_report(
     workdir: Path | None = None,
     output: Path | None = None,
     trades: bool = False,
+    universe_spec: UniverseSpec | None = None,
 ) -> Path:
     """樣本外驗證：方向只用 IS 期間 IC 決定，OOS 期間以固定方向回測。
 
     切分：交易日序列前 ``is_ratio`` 為 IS、其餘為 OOS。因子皆為 trailing 計算，
     全期一次算完再切片不會引入前視；唯一 in-sample 元素（方向選擇）被隔離在 IS。
+    ``universe_spec``：宣告式宇宙定義（:class:`qlab.universe.UniverseSpec`），
+    優先於 ``top_symbols``；報告頭會記錄 ``宇宙`` 以利重現。
     ``trades``：額外輸出 **OOS 期間**的交易明細 CSV（``oos_trades_<因子>.csv``）。
     回傳報告路徑。
     """
+    spec = _resolve_universe_spec(top_symbols, universe_spec)
     factor_wides, price_df, close_wide, raw_close_wide, data_desc = _prepare_universe(
-        factor_names, data, top_symbols, workdir
+        factor_names, data, top_symbols, workdir, universe_spec=universe_spec
     )
+    factor_wides, uni_desc = _apply_pit_mask(factor_wides, price_df, spec, rebalance_days)
     bench_daily, bench_label, bench_name = _resolve_benchmark(close_wide)
     dates = close_wide.index
     split = int(len(dates) * is_ratio)
@@ -1282,6 +1371,9 @@ def run_oos_report(
         "",
         f"- 產出時間：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         f"- 資料：{data_desc}",
+        f"- 宇宙：{spec.describe()}",
+        f"- 偏差標註：{_survivorship_note(spec)}",
+    ] + ([f"- 宇宙檔數（每期）：{uni_desc}"] if uni_desc else []) + [
         f"- 切分：IS {is_dates.min().date()} ~ {is_dates.max().date()}（{len(is_dates)} 日，{is_ratio:.0%}）"
         f" / OOS {oos_dates.min().date()} ~ {oos_dates.max().date()}（{len(oos_dates)} 日）",
         "- 方向只由 IS 期間 IC 決定，OOS 期間固定方向執行；因子皆為 trailing 計算，無前視",
@@ -1359,16 +1451,20 @@ def run_execution_timing_report(
     data: Path | None = None,
     top_symbols: int | None = None,
     workdir: Path | None = None,
+    universe_spec: UniverseSpec | None = None,
 ) -> Path:
     """執行時點對照報告：同一訊號以 t 收盤／t+1 開盤／t+1 收盤三種成交價回測。
 
     診斷回測隱含的「t 日收盤價成交」（台股盤後定價口徑）退化到次日用什麼價成交時，
     edge 還剩多少——若 alpha 集中在 t→t+1 隔夜/開盤反應段，策略對「收盤後消息、價已先動」
-    最脆弱，實務執行必須靠盤後定價或開盤卡位。回傳報告路徑。
+    最脆弱，實務執行必須靠盤後定價或開盤卡位。``universe_spec``：宣告式宇宙定義
+    （:class:`qlab.universe.UniverseSpec`），優先於 ``top_symbols``。回傳報告路徑。
     """
+    spec = _resolve_universe_spec(top_symbols, universe_spec)
     factor_wides, price_df, close_wide, raw_close_wide, data_desc = _prepare_universe(
-        factor_names, data, top_symbols, workdir, workspace=workspace
+        factor_names, data, top_symbols, workdir, workspace=workspace, universe_spec=universe_spec
     )
+    factor_wides, uni_desc = _apply_pit_mask(factor_wides, price_df, spec, rebalance_days)
     dirs_clean = _resolve_directions(factor_wides, price_df, direction, fwd_days)
     if any(v == "short" for v in dirs_clean.values()):
         raise ValueError(
@@ -1407,12 +1503,16 @@ def run_execution_timing_report(
         "方向（auto 為 in-sample）": "、".join(f"{k}={v}" for k, v in dirs_clean.items()),
         "緩衝帶": f"{buffer_n} 名（跌出才換）" if buffer_n else "無",
         "資料來源": data_desc,
+        "宇宙": spec.describe(),
+        "偏差標註": _survivorship_note(spec),
         "手續費（單邊）": f"{commission:.4%}",
         "證交稅（賣出）": f"{tax:.1%}",
         "滑價（單邊）": f"{slippage_rate:.4%}",
         "標的數": str(close_wide.shape[1]),
         "期間": f"{close_wide.index.min()} ~ {close_wide.index.max()}",
     }
+    if uni_desc:
+        params["宇宙檔數（每期）"] = uni_desc
     lines = [
         "# 執行時點對照報告",
         "",

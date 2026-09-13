@@ -44,7 +44,29 @@ def _add_backtest_args(p: argparse.ArgumentParser) -> None:
         "--top-symbols",
         type=int,
         default=None,
-        help="只取前 N 檔（依代碼排序）當宇宙，因子值會在該子集上重跑（例：--top-symbols 100）",
+        help="只取前 N 檔（依代碼排序）當宇宙，因子值會在該子集上重跑（例：--top-symbols 100）（宇宙 spec：code_first_n）",
+    )
+    p.add_argument(
+        "--pit-top-n",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "PIT 宇宙模式：每個再平衡日以滾動流動性排名取前 N 檔"
+            "（spec：pit_liquidity；與 --top-symbols 互斥、優先）。下市股退場、新上市股滿 --pit-min-listed 日入場"
+        ),
+    )
+    p.add_argument(
+        "--pit-lookback",
+        type=int,
+        default=60,
+        help="PIT 流動性滾動視窗（交易日，預設 60）",
+    )
+    p.add_argument(
+        "--pit-min-listed",
+        type=int,
+        default=120,
+        help="PIT 最低有價資料日數（預設 120；新上市股先觀察後才入宇宙）",
     )
 
 
@@ -103,15 +125,9 @@ def main(argv: list[str] | None = None) -> int:
 
     p_tw100 = sub.add_parser(
         "export-tw100",
-        help="從既有正式版 daily_pv.h5 切出前 N 檔（依 instrument 排序）→ factor_source_data_twN/（不重抓、零誤差）",
+        help="從既有正式版 daily_pv.h5 切出前 N 檔（依 instrument 代碼排序，正式口徑）→ factor_source_data_twN/（不重抓、零誤差）",
     )
     p_tw100.add_argument("--top", type=int, default=100, help="宇宙檔數（預設 100）")
-    p_tw100.add_argument(
-        "--order",
-        default="code",
-        choices=["code", "turnover"],
-        help="排序口徑：code=代碼序（預設、正式口徑）；turnover=成交金額排名（對照實驗用）",
-    )
     p_tw100.add_argument("--src", default=None, help="來源 h5（預設 factor_source_data_tw/daily_pv.h5）")
 
     p_bt = sub.add_parser(
@@ -167,7 +183,7 @@ def main(argv: list[str] | None = None) -> int:
     if ns.command == "export-tw100":
         from qlab.export_h5 import slice_top_symbols
 
-        rep = slice_top_symbols(n=ns.top, src=Path(ns.src) if ns.src else None, order=ns.order)
+        rep = slice_top_symbols(n=ns.top, src=Path(ns.src) if ns.src else None)
         print(f"已切出：{rep.path}（{rep.n_rows:,} 列 / {rep.n_symbols} 標的 / {rep.start}~{rep.end}）")
         return 0
 
@@ -192,6 +208,13 @@ def main(argv: list[str] | None = None) -> int:
         from qlab.factor_backtest import run_backtest_report, run_oos_report
 
         factor_names = tuple(f.strip() for f in ns.factors.split(",")) if ns.factors else None
+        universe_spec = None
+        if ns.pit_top_n is not None:
+            from qlab.universe import UniverseSpec
+
+            universe_spec = UniverseSpec.pit_liquidity(
+                top_n=ns.pit_top_n, lookback_days=ns.pit_lookback, min_listed_days=ns.pit_min_listed
+            )
         common = dict(
             factor_names=factor_names,
             top_n=ns.top_n,
@@ -202,6 +225,7 @@ def main(argv: list[str] | None = None) -> int:
             slippage_rate=0.0 if ns.gross else ns.slippage,
             data=Path(ns.data) if ns.data else None,
             top_symbols=ns.top_symbols,
+            universe_spec=universe_spec,
             trades=ns.trades,
         )
         if ns.oos is not None:
@@ -227,6 +251,13 @@ def main(argv: list[str] | None = None) -> int:
         from qlab.factor_backtest import run_execution_timing_report
 
         factor_names = tuple(f.strip() for f in ns.factors.split(",")) if ns.factors else None
+        universe_spec = None
+        if ns.pit_top_n is not None:
+            from qlab.universe import UniverseSpec
+
+            universe_spec = UniverseSpec.pit_liquidity(
+                top_n=ns.pit_top_n, lookback_days=ns.pit_lookback, min_listed_days=ns.pit_min_listed
+            )
         out = run_execution_timing_report(
             factor_names=factor_names,
             top_n=ns.top_n,
@@ -240,6 +271,7 @@ def main(argv: list[str] | None = None) -> int:
             output=Path(ns.output) if ns.output else None,
             data=Path(ns.data) if ns.data else None,
             top_symbols=ns.top_symbols,
+            universe_spec=universe_spec,
         )
         print(f"執行時點對照報告已輸出：{out}")
         return 0

@@ -793,7 +793,7 @@ def test_build_signals_rejects_short():
 
 
 def test_slice_top_symbols(tmp_path):
-    """slice_top_symbols（order=code）：依 instrument 排序切前 N 檔（OTC < TSE）。"""
+    """slice_top_symbols：固定 code 序（依 instrument 排序切前 N 檔，OTC < TSE），正式口徑。"""
     from qlab.export_h5 import slice_top_symbols
 
     src = tmp_path / "daily_pv.h5"
@@ -806,64 +806,12 @@ def test_slice_top_symbols(tmp_path):
     )
     df.to_hdf(src, key="data")
 
-    rep = slice_top_symbols(src=src, n=2, output_dir=tmp_path / "out", order="code")
+    rep = slice_top_symbols(src=src, n=2, output_dir=tmp_path / "out")
     assert rep.n_symbols == 2 and rep.path.exists() and (rep.path.parent / "README.md").exists()
     out = pd.read_hdf(rep.path, key="data")
     got = sorted(out.index.get_level_values("instrument").unique())
     assert got == ["OTC1234", "OTC5678"]  # 排序前 2 檔（OTC1234 < OTC5678 < TSE…）
     assert len(out) == 4  # 2 檔 × 2 日
-
-
-def test_slice_top_symbols_turnover_order(tmp_path):
-    """slice_top_symbols（order=turnover）：依宇宙 CSV 成交金額排名切前 N 檔。"""
-    from qlab.export_h5 import slice_top_symbols
-
-    src = tmp_path / "daily_pv.h5"
-    idx = pd.MultiIndex.from_product(
-        [pd.to_datetime(["2024-01-02"]), ["TSE2330", "TSE1101", "TSE2454"]],
-        names=["datetime", "instrument"],
-    )
-    df = pd.DataFrame(
-        {"$open": 1.0, "$close": 1.0, "$high": 1.0, "$low": 1.0, "$volume": 1000.0, "$factor": 1.0}, index=idx
-    )
-    df.to_hdf(src, key="data")
-    csv = tmp_path / "top_liquidity_300.csv"
-    csv.write_text(
-        "rank,symbol,name,avg_turnover_twd,sampled_days\n"
-        "0,2454,聯發科,21970678265.0,5\n"
-        "1,2330,台積電,38947729876.0,5\n"
-        "2,1101,台泥,1000000000.0,5\n",
-        encoding="utf-8",
-    )
-
-    rep = slice_top_symbols(
-        src=src, n=2, output_dir=tmp_path / "out", order="turnover", universe_csv=csv
-    )
-    out = pd.read_hdf(rep.path, key="data")
-    got = sorted(out.index.get_level_values("instrument").unique())
-    assert got == ["TSE2330", "TSE2454"]  # 成交金額排名前 2（2454 → 2330），不含代碼較小的 1101
-
-
-def test_slice_top_symbols_turnover_csv_missing(tmp_path):
-    """order=turnover 但宇宙 CSV 不存在 → fallback 代碼序，不報錯。"""
-    from qlab.export_h5 import slice_top_symbols
-
-    src = tmp_path / "daily_pv.h5"
-    idx = pd.MultiIndex.from_product(
-        [pd.to_datetime(["2024-01-02"]), ["TSE2330", "TSE1101"]],
-        names=["datetime", "instrument"],
-    )
-    df = pd.DataFrame(
-        {"$open": 1.0, "$close": 1.0, "$high": 1.0, "$low": 1.0, "$volume": 1000.0, "$factor": 1.0}, index=idx
-    )
-    df.to_hdf(src, key="data")
-
-    rep = slice_top_symbols(
-        src=src, n=1, output_dir=tmp_path / "out",
-        order="turnover", universe_csv=tmp_path / "nope.csv",
-    )
-    out = pd.read_hdf(rep.path, key="data")
-    assert sorted(out.index.get_level_values("instrument").unique()) == ["TSE1101"]
 
 
 def test_slice_top_symbols_missing_src(tmp_path):

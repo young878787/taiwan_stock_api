@@ -119,7 +119,9 @@ def build_rdagent_env(
     tw100 = Path(st.data_dir) / "qlab" / "factor_source_data_tw100"
     # 演化宇宙選擇（不依賴 LLM 供應商）：fin_factor 因子執行固定用
     # data_folder_debug（RD-Agent FIXME 行為），因此「演化宇宙」實際由 DEBUG
-    # 目錄決定 → tw100 模式把 DEBUG 指到代碼前 100 檔（與回測口徑一致）。
+    # 目錄決定 → tw100 模式把 DEBUG 指到代碼前 100 檔。tw100 語意等同
+    # UniverseSpec.code_first_n(100) 的別名（與回測 --top-symbols 100 口徑一致，
+    # 見 qlab.universe）。
     debug_dir = tw_debug
     if universe == "tw100":
         if not (tw100 / "daily_pv.h5").exists():
@@ -153,6 +155,8 @@ def run_rdagent(
     """執行 rdagent CLI，串流輸出（互動式應用需在同一終端觀察進度）。
 
     ``universe``：full / tw100 / debug（因子演化資料宇宙，見 build_rdagent_env）。
+    其中 ``tw100`` 為 :class:`qlab.universe.UniverseSpec` 的
+    ``code_first_n(100)`` 別名（與回測 ``--top-symbols 100`` 口徑一致）。
     ``guidance``：none / short（假設性引導，見 qlab.short_factor_proposal）。
     """
     rdagent = shutil.which("rdagent")
