@@ -124,13 +124,6 @@ with httpx.Client(base_url="http://127.0.0.1:8000", timeout=10) as session:
     print(client.list(symbol="2330", limit=5).json())
 ```
 
-## FastAPI / Alembic 的選擇
-
-本次使用 **FastAPI + Pydantic + Python 內建 sqlite3**。FastAPI 自動產生 OpenAPI 與 Swagger；SQLite 處理持久化與交易。固定一張資料表，目前不需要 SQLAlchemy 或 Alembic。
-
-Alembic 是資料表結構遷移工具，適合日後要保留舊資料並增加欄位、改型別或約束時使用。一般 CRUD、下載與更新資料不需要 Alembic。`CREATE TABLE IF NOT EXISTS` 僅建立缺少的資料表，不會自動升級已存在的 schema。[Alembic 官方文件](https://alembic.sqlalchemy.org/en/latest/)
-
-完整現況分析、API 決策、資料契約與風險見 [docs/rest_api_assignment.md](docs/rest_api_assignment.md)。服務預設只監聽本機，沒有認證或權限機制，適用作業展示；公開部署前需要另外設計存取限制。
 
 ## 繳交清單與驗證
 
