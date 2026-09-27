@@ -33,7 +33,7 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 
 [tool.uv]
-default-groups = ["dev", "ai"]
+default-groups = ["dev"]
 
 [build-system]
 requires = ["hatchling"]

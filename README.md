@@ -207,6 +207,12 @@ uv run pytest          # 執行測試（全部離線運行，不需網路/金鑰
 
 `src/qlab/` 與本套件共用 venv、`.env` 與 `data/`，把 normalized daily 轉成 Qlib bin 格式後進行 AI 因子分析（Alpha158 + LightGBM、RD-Agent 因子自動演化）。安裝、金鑰（支援 **OpenRouter** / DeepSeek / OpenAI）與使用說明見 **`docs/qlab_setup.md`**。
 
+一般作業不需要 qlab 的 AI 依賴。要執行下列研究功能時，再明確安裝：
+
+```bash
+uv sync --group ai
+```
+
 ```bash
 uv run python -m qlab export     # data/normalized/daily → data/qlab/qlib_data（Qlib bin 格式）
 uv run python -m qlab ic --start 2021-01-01 --end 2026-08-26   # Alpha158 + LightGBM IC 分析

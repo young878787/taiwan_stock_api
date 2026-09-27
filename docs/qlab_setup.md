@@ -13,11 +13,11 @@ kstock daily Parquet ──export──▶ Qlib bin 格式 ──▶ Qlib（Alph
 | 項目 | 說明 |
 |---|---|
 | Python | **3.12**（`.python-version` 已鎖定；pyqlib 官方 wheel 最高只到 cp312） |
-| 依賴 | `uv sync` 即可（`ai` 依賴群組含 `pyqlib` + `rdagent`，已設為預設群組） |
+| 依賴 | 使用 qlab 時需安裝 `ai` 依賴群組（含 `pyqlib` + `rdagent`）；一般 `uv sync` 不安裝此群組 |
 | Docker | RD-Agent 的量化情境（`quant`、`fin_factor`）**執行階段**需要 Docker 容器跑 Qlib 回測；安裝階段不需要 |
 
 ```bash
-uv sync                # 重建 .venv（Python 3.12）並安裝全部依賴
+uv sync --group ai     # 重建 .venv（Python 3.12）並安裝 qlab AI 依賴
 uv run python -c "import qlib, rdagent; print('ok')"
 ```
 
