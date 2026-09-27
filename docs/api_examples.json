@@ -1,0 +1,276 @@
+{
+  "passed": true,
+  "base_url": "http://127.0.0.1:8000",
+  "examples": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/daily-bars",
+        "params": {
+          "symbol": "2330",
+          "limit": 2
+        },
+        "data": null
+      },
+      "response": {
+        "status_code": 200,
+        "output": {
+          "items": [
+            {
+              "market": "TSE",
+              "open": 2480.0,
+              "high": 2490.0,
+              "low": 2470.0,
+              "close": 2475.0,
+              "volume_shares": 14557662,
+              "turnover_twd": 36107476243.0,
+              "trade_count": 75382,
+              "source": "twse",
+              "symbol": "2330",
+              "date": "2026-09-24"
+            }
+          ],
+          "total": 1,
+          "limit": 2,
+          "offset": 0
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/daily-bars",
+        "params": null,
+        "data": {
+          "symbol": "DEMO9498AC3D",
+          "date": "2000-01-01",
+          "market": "TSE",
+          "open": 100.0,
+          "high": 105.0,
+          "low": 99.0,
+          "close": 102.0,
+          "volume_shares": 1000,
+          "turnover_twd": 102000.0,
+          "trade_count": 10,
+          "source": "manual"
+        }
+      },
+      "response": {
+        "status_code": 201,
+        "output": {
+          "market": "TSE",
+          "open": 100.0,
+          "high": 105.0,
+          "low": 99.0,
+          "close": 102.0,
+          "volume_shares": 1000,
+          "turnover_twd": 102000.0,
+          "trade_count": 10,
+          "source": "manual",
+          "symbol": "DEMO9498AC3D",
+          "date": "2000-01-01"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/daily-bars/DEMO9498AC3D/2000-01-01",
+        "params": null,
+        "data": null
+      },
+      "response": {
+        "status_code": 200,
+        "output": {
+          "market": "TSE",
+          "open": 100.0,
+          "high": 105.0,
+          "low": 99.0,
+          "close": 102.0,
+          "volume_shares": 1000,
+          "turnover_twd": 102000.0,
+          "trade_count": 10,
+          "source": "manual",
+          "symbol": "DEMO9498AC3D",
+          "date": "2000-01-01"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/daily-bars",
+        "params": {
+          "symbol": "DEMO9498AC3D"
+        },
+        "data": null
+      },
+      "response": {
+        "status_code": 200,
+        "output": {
+          "items": [
+            {
+              "market": "TSE",
+              "open": 100.0,
+              "high": 105.0,
+              "low": 99.0,
+              "close": 102.0,
+              "volume_shares": 1000,
+              "turnover_twd": 102000.0,
+              "trade_count": 10,
+              "source": "manual",
+              "symbol": "DEMO9498AC3D",
+              "date": "2000-01-01"
+            }
+          ],
+          "total": 1,
+          "limit": 100,
+          "offset": 0
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/daily-bars",
+        "params": null,
+        "data": {
+          "symbol": "DEMO9498AC3D",
+          "date": "2000-01-01",
+          "market": "TSE",
+          "open": 100.0,
+          "high": 105.0,
+          "low": 99.0,
+          "close": 102.0,
+          "volume_shares": 1000,
+          "turnover_twd": 102000.0,
+          "trade_count": 10,
+          "source": "manual"
+        }
+      },
+      "response": {
+        "status_code": 409,
+        "output": {
+          "detail": "相同 symbol 與 date 的日 K 已存在"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "PUT",
+        "path": "/api/v1/daily-bars/DEMO9498AC3D/2000-01-01",
+        "params": null,
+        "data": {
+          "market": "TSE",
+          "open": 100.0,
+          "high": 105.0,
+          "low": 99.0,
+          "close": 103.0,
+          "volume_shares": 1000,
+          "turnover_twd": 102000.0,
+          "trade_count": 10,
+          "source": "manual"
+        }
+      },
+      "response": {
+        "status_code": 200,
+        "output": {
+          "market": "TSE",
+          "open": 100.0,
+          "high": 105.0,
+          "low": 99.0,
+          "close": 103.0,
+          "volume_shares": 1000,
+          "turnover_twd": 102000.0,
+          "trade_count": 10,
+          "source": "manual",
+          "symbol": "DEMO9498AC3D",
+          "date": "2000-01-01"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/daily-bars/DEMO9498AC3D/2000-01-01",
+        "params": null,
+        "data": null
+      },
+      "response": {
+        "status_code": 200,
+        "output": {
+          "market": "TSE",
+          "open": 100.0,
+          "high": 105.0,
+          "low": 99.0,
+          "close": 103.0,
+          "volume_shares": 1000,
+          "turnover_twd": 102000.0,
+          "trade_count": 10,
+          "source": "manual",
+          "symbol": "DEMO9498AC3D",
+          "date": "2000-01-01"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "PUT",
+        "path": "/api/v1/daily-bars/DEMO9498AC3D/2000-01-01",
+        "params": null,
+        "data": {
+          "market": "TSE",
+          "open": 100.0,
+          "high": 105.0,
+          "low": 99.0,
+          "close": 102.0,
+          "volume_shares": -1,
+          "turnover_twd": 102000.0,
+          "trade_count": 10,
+          "source": "manual"
+        }
+      },
+      "response": {
+        "status_code": 422,
+        "output": {
+          "detail": [
+            {
+              "loc": [
+                "body",
+                "volume_shares"
+              ],
+              "msg": "Input should be greater than or equal to 0",
+              "type": "greater_than_equal"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "DELETE",
+        "path": "/api/v1/daily-bars/DEMO9498AC3D/2000-01-01",
+        "params": null,
+        "data": null
+      },
+      "response": {
+        "status_code": 204,
+        "output": null
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/daily-bars/DEMO9498AC3D/2000-01-01",
+        "params": null,
+        "data": null
+      },
+      "response": {
+        "status_code": 404,
+        "output": {
+          "detail": "找不到日 K"
+        }
+      }
+    }
+  ]
+}

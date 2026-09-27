@@ -12,7 +12,7 @@ import polars as pl
 
 from kstock.adapters.base import DataSourceAdapter
 from kstock.config.settings import settings
-from kstock.models.schema import empty_dataframe
+from kstock.models.schema import TABLE_DTYPES, empty_dataframe
 from kstock.normalizers.volume import volume_to_shares
 
 _FIELDS_EXPECTED = ("日期", "成交股數", "成交金額", "開盤價", "最高價", "最低價", "收盤價", "漲跌價差", "成交筆數")
@@ -138,3 +138,41 @@ def _to_float(value) -> float | None:
 def _to_int(value) -> int | None:
     f = _to_float(value)
     return int(f) if f is not None else None
+
+
+DAILY_SNAPSHOT_URL = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
+
+
+def normalize_daily_snapshot(rows: list[dict]) -> pl.DataFrame:
+    """全市場 OpenAPI JSON → 既有 daily schema；保留官方日期與股數單位。"""
+    required = {"Date", "Code", "TradeVolume", "TradeValue", "OpeningPrice", "HighestPrice",
+                "LowestPrice", "ClosingPrice", "Transaction"}
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("TWSE 資料必須是非空 JSON 陣列")
+
+    def number(value, integer=False):
+        text = str(value).replace(",", "").strip() if value is not None else ""
+        if text in ("", "--", "---"):
+            return None
+        return int(text) if integer else float(text)
+
+    records = []
+    for row in rows:
+        if not isinstance(row, dict) or not required.issubset(row):
+            raise ValueError("TWSE 資料缺少必要欄位")
+        raw_date = str(row["Date"])
+        if len(raw_date) != 7 or not raw_date.isdigit():
+            raise ValueError(f"無法解析 TWSE 日期: {raw_date!r}")
+        trade_date = date(int(raw_date[:3]) + 1911, int(raw_date[3:5]), int(raw_date[5:]))
+        records.append({
+            "symbol": row["Code"], "market": "TSE", "date": trade_date,
+            "open": number(row["OpeningPrice"]), "high": number(row["HighestPrice"]),
+            "low": number(row["LowestPrice"]), "close": number(row["ClosingPrice"]),
+            "volume_shares": number(row["TradeVolume"], integer=True),
+            "turnover_twd": number(row["TradeValue"]),
+            "trade_count": number(row["Transaction"], integer=True), "source": "twse",
+        })
+    frame = pl.DataFrame(records, schema=TABLE_DTYPES["daily"])
+    if frame.unique(subset=["symbol", "date"]).height != frame.height:
+        raise ValueError("TWSE 資料包含重複的 symbol 與 date")
+    return frame
